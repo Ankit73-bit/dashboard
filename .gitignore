@@ -1,0 +1,4 @@
+.env
+.venv
+.tmp.driveupload
+.tmp.drivedownload
