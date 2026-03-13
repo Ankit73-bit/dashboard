@@ -35,30 +35,71 @@ def get_output_dir():
 
 
 # ─── Watermark logic ──────────────────────────────────────────────────────────
-def create_watermark_pdf(text, opacity, font_size, rotation, color_rgb):
+# def create_watermark_pdf(text, opacity, font_size, rotation, color_rgb):
+#     packet = io.BytesIO()
+#     c = canvas.Canvas(packet, pagesize=letter)
+#     c.setFont("Helvetica-Bold", font_size)
+#     r, g, b = color_rgb
+#     c.setFillColorRGB(r, g, b, alpha=opacity)
+#     c.saveState()
+#     c.translate(306, 396)   # center of letter page
+#     c.rotate(rotation)
+#     c.drawCentredString(0, 0, text)
+#     c.restoreState()
+#     c.save()
+#     packet.seek(0)
+#     return PdfReader(packet)
+
+def create_watermark_pdf(text, opacity, font_size, rotation, color_rgb, width, height):
     packet = io.BytesIO()
-    c = canvas.Canvas(packet, pagesize=letter)
+    c = canvas.Canvas(packet, pagesize=(width, height))
+
     c.setFont("Helvetica-Bold", font_size)
     r, g, b = color_rgb
     c.setFillColorRGB(r, g, b, alpha=opacity)
+
     c.saveState()
-    c.translate(306, 396)   # center of letter page
+    c.translate(width / 2, height / 2)  # dynamic center
     c.rotate(rotation)
     c.drawCentredString(0, 0, text)
     c.restoreState()
+
     c.save()
     packet.seek(0)
+
     return PdfReader(packet)
 
 
+# def watermark_pdf(input_path, output_path, text, opacity, font_size, rotation, color_rgb):
+#     watermark_reader = create_watermark_pdf(text, opacity, font_size, rotation, color_rgb)
+#     watermark_page   = watermark_reader.pages[0]
+#     reader = PdfReader(input_path)
+#     writer = PdfWriter()
+#     for page in reader.pages:
+#         page.merge_page(watermark_page)
+#         writer.add_page(page)
+#     with open(output_path, "wb") as f:
+#         writer.write(f)
+
 def watermark_pdf(input_path, output_path, text, opacity, font_size, rotation, color_rgb):
-    watermark_reader = create_watermark_pdf(text, opacity, font_size, rotation, color_rgb)
-    watermark_page   = watermark_reader.pages[0]
+
     reader = PdfReader(input_path)
     writer = PdfWriter()
+
     for page in reader.pages:
+
+        width = float(page.mediabox.width)
+        height = float(page.mediabox.height)
+
+        watermark_reader = create_watermark_pdf(
+            text, opacity, font_size, rotation, color_rgb, width, height
+        )
+
+        watermark_page = watermark_reader.pages[0]
+
         page.merge_page(watermark_page)
         writer.add_page(page)
+
     with open(output_path, "wb") as f:
         writer.write(f)
 
