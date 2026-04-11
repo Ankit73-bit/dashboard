@@ -90,6 +90,7 @@ def generate_pdfs(excel_path, template_path, output_dir, log_fn, progress_fn):
             log_fn(f"✅  [{index + 1}/{total}]  Row {index + 1} → PDF")
         except Exception as e:
             log_fn(f"❌  [{index + 1}/{total}]  Row {index + 1} failed: {e}")
+            return False
 
         os.remove(temp_typ)
         progress_fn((index + 1) / total * 0.5 + 0.5)  # second half of progress
