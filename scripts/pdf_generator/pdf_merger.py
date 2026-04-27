@@ -97,7 +97,7 @@ def process_batch(batch_data):
                         if not matching_rows.empty:
                             row = matching_rows.iloc[0]
                             logging.info(f"Generating missing PDF for {cuid}")
-                            from capri_pipeline.pdf_generator import process_row
+                            from pdf_generator.pdf_generator import process_row
                             generated_path = process_row(
                                 row=row,
                                 output_folder=output_folder,

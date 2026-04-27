@@ -16,9 +16,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ui.py lives inside scripts/capri_pipeline/
-# We need the PARENT (scripts/) on sys.path so `import capri_pipeline` works.
-_THIS_DIR   = os.path.dirname(os.path.abspath(__file__))   # …/scripts/capri_pipeline
+# ui.py lives inside scripts/pdf_generator/
+# We need the PARENT (scripts/) on sys.path so `import pdf_generator` works.
+_THIS_DIR   = os.path.dirname(os.path.abspath(__file__))   # …/scripts/pdf_generator
 _SCRIPTS_DIR = os.path.dirname(_THIS_DIR)                  # …/scripts
 
 for _p in (_SCRIPTS_DIR, _THIS_DIR):
@@ -565,9 +565,9 @@ class TypstApp(tk.Tk):
 
         def _worker():
             try:
-                from capri_pipeline.config import AppConfig
-                from capri_pipeline.logging_config import setup_logging
-                from capri_pipeline.main import main as run_main
+                from pdf_generator.config import AppConfig
+                from pdf_generator.logging_config import setup_logging
+                from pdf_generator.main import main as run_main
                 setup_logging()
 
                 config = AppConfig.from_dict(cfg_dict)

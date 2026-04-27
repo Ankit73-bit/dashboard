@@ -3,7 +3,7 @@ import logging
 import subprocess
 from typing import List
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from capri_pipeline.config import CompressionConfig
+from pdf_generator.config import CompressionConfig
 
 
 class PDFCompressor:

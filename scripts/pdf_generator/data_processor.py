@@ -67,13 +67,13 @@ def process_row_wrapper(args):
         for tbl in notice_config.get("tables", [])
     )
     if has_rotation:
-        from capri_pipeline.pdf_generator import process_table_rotation
+        from pdf_generator.pdf_generator import process_table_rotation
         return process_table_rotation(
             row, output_folder, template_dict, notice_config,
             temp_dir, default_template, enable_password=enable_password, password=password
         )
     else:
-        from capri_pipeline.pdf_generator import process_row
+        from pdf_generator.pdf_generator import process_row
         return process_row(
             row, output_folder, template_dict, notice_config,
             temp_dir, default_template, enable_password=enable_password, password=password
@@ -97,7 +97,7 @@ def process_in_chunks(
     temp_dir = os.path.join(output_folder, "temp_shared")
     os.makedirs(temp_dir, exist_ok=True)
 
-    from capri_pipeline.pdf_generator import prepare_all_images, resolve_output_id
+    from pdf_generator.pdf_generator import prepare_all_images, resolve_output_id
     prepare_all_images(template_dict, output_folder, temp_dir)
 
     state_dir = os.path.join(output_folder, "state")

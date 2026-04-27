@@ -11,13 +11,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from capri_pipeline.logging_config import setup_logging
-from capri_pipeline.config import AppConfig
-from capri_pipeline.data_processor import process_in_chunks, log_memory_usage, convert_excel_to_csv
-from capri_pipeline.pdf_generator import process_row
-from capri_pipeline.pdf_merger import merge_pdfs
-from capri_pipeline.memory_monitor import MemoryMonitor
-from capri_pipeline.s3_uploader import upload_files_to_s3
+from pdf_generator.logging_config import setup_logging
+from pdf_generator.config import AppConfig
+from pdf_generator.data_processor import process_in_chunks, log_memory_usage, convert_excel_to_csv
+from pdf_generator.pdf_generator import process_row
+from pdf_generator.pdf_merger import merge_pdfs
+from pdf_generator.memory_monitor import MemoryMonitor
+from pdf_generator.s3_uploader import upload_files_to_s3
 
 
 @contextmanager
