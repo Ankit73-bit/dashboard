@@ -45,19 +45,41 @@ def cleanup_temp_dir(temp_dir: str) -> None:
         logging.warning(f"Failed to remove temp directory {temp_dir}: {e}")
 
 
-def prepare_all_images(template_dict: Dict[str, str], output_folder: str, temp_dir: str) -> None:
+def prepare_all_images(
+    template_dict: Dict[str, str],
+    output_folder: str,
+    temp_dir: str,
+    extra_search_dirs: list = None
+) -> None:
     all_images = set()
     for content in template_dict.values():
         all_images.update(re.findall(r'#image\("([^\"]+)"', content))
+
+    search_dirs = [output_folder, os.path.dirname(output_folder)]
+    if extra_search_dirs:
+        search_dirs = list(extra_search_dirs) + search_dirs
+
     for img_name in all_images:
-        src = os.path.join(output_folder, img_name)
-        dst = os.path.join(temp_dir, img_name)
-        if os.path.exists(src) and not os.path.exists(dst):
-            try:
-                shutil.copy(src, dst)
-                logging.info(f"Copied image {img_name} to temp directory")
-            except Exception as e:
-                logging.warning(f"Failed to copy image {img_name}: {e}")
+        basename = os.path.basename(img_name)
+        dst = os.path.join(temp_dir, basename)
+        if os.path.exists(dst):
+            continue
+        copied = False
+        for search_dir in search_dirs:
+            src = os.path.join(search_dir, basename)
+            if not os.path.exists(src):
+                # also try with the original relative path
+                src = os.path.join(search_dir, img_name)
+            if os.path.exists(src):
+                try:
+                    shutil.copy(src, dst)
+                    logging.info(f"Copied image {img_name} from {search_dir} to temp directory")
+                    copied = True
+                    break
+                except Exception as e:
+                    logging.warning(f"Failed to copy image {img_name} from {search_dir}: {e}")
+        if not copied:
+            logging.warning(f"Image not found in any search path: {img_name}")
 
 
 def get_template_for_row(row: pd.Series, template_dict: Dict[str, str], default_template: str) -> str:

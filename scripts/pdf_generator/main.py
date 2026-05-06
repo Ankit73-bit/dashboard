@@ -100,7 +100,8 @@ def main(config: AppConfig = None):
                     max_workers=config.processing.max_workers,
                     default_template=default_template,
                     enable_password=config.processing.pdf_protection.enabled,
-                    password_field=config.processing.pdf_protection.password_field
+                    password_field=config.processing.pdf_protection.password_field,
+                    images_folder=config.paths.images or None
                 )
             log_memory_usage("After PDF generation")
             gc.collect()

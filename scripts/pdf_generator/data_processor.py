@@ -91,14 +91,16 @@ def process_in_chunks(
     default_template: str,
     state_file: str = "processing_state.json",
     enable_password: bool = False,
-    password_field: Optional[str] = None
+    password_field: Optional[str] = None,
+    images_folder: Optional[str] = None
 ) -> Optional[List[tuple]]:
 
     temp_dir = os.path.join(output_folder, "temp_shared")
     os.makedirs(temp_dir, exist_ok=True)
 
     from pdf_generator.pdf_generator import prepare_all_images, resolve_output_id
-    prepare_all_images(template_dict, output_folder, temp_dir)
+    extra_dirs = [images_folder] if images_folder and os.path.isdir(images_folder) else []
+    prepare_all_images(template_dict, output_folder, temp_dir, extra_search_dirs=extra_dirs)
 
     state_dir = os.path.join(output_folder, "state")
     os.makedirs(state_dir, exist_ok=True)

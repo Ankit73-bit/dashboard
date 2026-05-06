@@ -27,6 +27,9 @@ for _p in (_SCRIPTS_DIR, _THIS_DIR):
 
 BASE_DIR = _THIS_DIR  # working dir for relative paths inside the pipeline UI
 
+DESKTOP  = os.path.join(os.path.expanduser("~"), "Desktop")
+BASE_OUT = os.path.join(DESKTOP, "OUTPUT", "PDF_Generator")
+
 
 # ───────────────────────────────────────────────────────────────
 #  Logging → ScrolledText
@@ -147,6 +150,7 @@ class TypstApp(tk.Tk):
         self._config_var = tk.StringVar()
         self._output_var = tk.StringVar(value="OUTPUT")
         self._merge_var  = tk.StringVar(value="MERGE_PDF")
+        self._base_out   = BASE_OUT  # Desktop\OUTPUT\PDF_Generator
         self._images_var = tk.StringVar()
 
         _field_row(c1, "Data file (.xlsx / .csv)", self._data_var, 0,
@@ -155,9 +159,18 @@ class TypstApp(tk.Tk):
         _field_row(c1, "Notice Config (.json) [Optional]", self._config_var, 1,
                    lambda: self._browse_file(self._config_var, [("JSON","*.json")]),
                    self.CARD, self.FG, self.ENT)
-        _field_row(c1, "Output folder", self._output_var, 2, None, self.CARD, self.FG, self.ENT)
-        _field_row(c1, "Merge folder",  self._merge_var,  3, None, self.CARD, self.FG, self.ENT)
-        _field_row(c1, "Images folder [Optional]", self._images_var, 4,
+        # Output path banner
+        out_banner = tk.Frame(c1, bg="#082a12", padx=10, pady=6)
+        out_banner.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(4, 2))
+        tk.Label(
+            out_banner,
+            text=f"📁  Output → Desktop\\OUTPUT\\PDF_Generator\\<folder name>",
+            bg="#082a12", fg="#30d158", font=("Segoe UI", 9, "italic")
+        ).pack(anchor="w")
+
+        _field_row(c1, "Output folder name", self._output_var, 3, None, self.CARD, self.FG, self.ENT)
+        _field_row(c1, "Merge folder name",  self._merge_var,  4, None, self.CARD, self.FG, self.ENT)
+        _field_row(c1, "Images folder [Optional]", self._images_var, 5,
                    lambda: self._browse_dir(self._images_var),
                    self.CARD, self.FG, self.ENT)
 
@@ -470,8 +483,8 @@ class TypstApp(tk.Tk):
                 "data":      self._data_var.get().strip(),
                 "config":    self._config_var.get().strip(),
                 "templates": templates,
-                "output":    os.path.join(BASE_DIR, out_name),
-                "merge":     os.path.join(BASE_DIR, merge_name),
+                "output":    os.path.join(BASE_OUT, out_name),
+                "merge":     os.path.join(BASE_OUT, merge_name),
                 "images":    self._images_var.get().strip(),
             },
             "processing": {
@@ -568,9 +581,10 @@ class TypstApp(tk.Tk):
                 from pdf_generator.config import AppConfig
                 from pdf_generator.logging_config import setup_logging
                 from pdf_generator.main import main as run_main
-                setup_logging()
 
                 config = AppConfig.from_dict(cfg_dict)
+                setup_logging(output_folder=config.paths.output)
+
                 if config.paths.images and os.path.exists(config.paths.images):
                     os.makedirs(config.paths.output, exist_ok=True)
                     for img in os.listdir(config.paths.images):
