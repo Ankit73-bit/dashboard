@@ -6,7 +6,7 @@ from ui.data import GROUPS, SERVICES
 from ui.panels.home_panel       import HomePanel
 from ui.panels.docs_panel       import DocsPanel
 from ui.panels.group_sub_panel  import GroupSubPanel
-from ui.panels.paras_print_panel import ParasPrintPanel
+from ui.panels.paras_print_panel import ParasPrintPanel, PARAS_PRINT_SERVICES
 
 
 class Dashboard(ctk.CTk):
@@ -71,6 +71,7 @@ class Dashboard(ctk.CTk):
         all_services_for_docs = (
             [tool for grp in GROUPS for tool in grp["tools"]]
             + SERVICES
+            + PARAS_PRINT_SERVICES
         )
 
         # Pre-build all panels
@@ -80,7 +81,7 @@ class Dashboard(ctk.CTk):
             open_group_cb=self._open_group
         )
         self.docs_panel        = DocsPanel(self.main, all_services_for_docs)
-        self.paras_print_panel = ParasPrintPanel(self.main)
+        self.paras_print_panel = ParasPrintPanel(self.main, open_docs_cb=self._open_docs_for)
         self.sub_panel         = None   # created on demand per group
 
         self._show_home()
