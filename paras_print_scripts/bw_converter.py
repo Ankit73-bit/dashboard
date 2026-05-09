@@ -46,25 +46,36 @@ def _check_pillow():
 
 
 def _convert_bw(src_path, dst_path):
-    """Convert visible area to grayscale, preserve alpha channel if present."""
+    """
+    Remove background, then convert foreground to grayscale
+    while preserving transparency.
+    """
     from PIL import Image
+    from rembg import remove
+    import io
 
-    img = Image.open(src_path)
+    # Open original image
+    img = Image.open(src_path).convert("RGBA")
 
-    if img.mode == "RGBA":
-        r, g, b, a = img.split()
-        gray = Image.merge("RGB", (r, g, b)).convert("L")
-        final = Image.merge("RGBA", (gray, gray, gray, a))
-    elif img.mode == "P":
-        img  = img.convert("RGBA")
-        r, g, b, a = img.split()
-        gray = Image.merge("RGB", (r, g, b)).convert("L")
-        final = Image.merge("RGBA", (gray, gray, gray, a))
-    else:
-        img   = img.convert("RGB")
-        gray  = img.convert("L")
-        final = gray.convert("RGB")
+    # Remove background
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, format="PNG")
 
+    removed_bg = remove(img_bytes.getvalue())
+
+    # Reload transparent result
+    fg = Image.open(io.BytesIO(removed_bg)).convert("RGBA")
+
+    # Split channels
+    r, g, b, a = fg.split()
+
+    # Convert foreground to grayscale
+    gray = Image.merge("RGB", (r, g, b)).convert("L")
+
+    # Rebuild with original alpha
+    final = Image.merge("RGBA", (gray, gray, gray, a))
+
+    # Save as transparent PNG
     final.save(dst_path)
 
 
