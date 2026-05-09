@@ -169,9 +169,24 @@ class MissingPhotosPanelContent(ctk.CTkScrollableFrame):
     def _process(self):
         out_dir = get_output_dir()
         try:
-            source_files = set(os.listdir(self._source_folder))
-            edited_files = set(os.listdir(self._edited_folder))
-            missing      = sorted(source_files - edited_files)
+            def normalize(name):
+                return os.path.splitext(name)[0].strip().lower()
+
+            source_files = [
+                f for f in os.listdir(self._source_folder)
+                if os.path.isfile(os.path.join(self._source_folder, f))
+            ]
+
+            edited_files = {
+                normalize(f)
+                for f in os.listdir(self._edited_folder)
+                if os.path.isfile(os.path.join(self._edited_folder, f))
+            }
+
+            missing = sorted(
+                f for f in source_files
+                if normalize(f) not in edited_files
+            )
 
             self._log(f"📂 Source files:  {len(source_files)}")
             self._log(f"✏️  Edited files:  {len(edited_files)}")
