@@ -8,3 +8,9 @@
 .env
 __pycache__
 u2net.onnx
+# rembg / onnx models
+*.onnx
+.u2net
+models/
+# rembg cache
+~/.u2net
