@@ -7,3 +7,4 @@
 *.pyd
 .env
 __pycache__
+u2net.onnx
