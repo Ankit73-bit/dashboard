@@ -1,6 +1,7 @@
 """
-Tool: Photo Background Changer
-Resize photos to exact mm dimensions, remove background with rembg, and apply a new solid colour.
+Tool: BG Changer
+Resize photos to exact mm size, remove background with AI (rembg),
+and apply any solid colour background.
 Embeddable Panel + standalone window.
 """
 
@@ -27,16 +28,18 @@ C = {
 }
 TINT = {"bg": "#042820", "mid": "#084038", "bdr": "#0c5c50"}
 
-# Built-in quick-select background colours
-PRESET_COLOURS = [
-    ("#FFFFFF", "White"),
-    ("#000000", "Black"),
-    ("#FF0000", "Red"),
-    ("#0000FF", "Blue"),
-    ("#008000", "Green"),
-    ("#FFD700", "Gold"),
-    ("#808080", "Gray"),
-    ("#FFA500", "Orange"),
+PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
+
+# Preset background swatches: (label, hex)
+PRESETS = [
+    ("⬜ White",   "#FFFFFF"),
+    ("🟥 Red",     "#FF0000"),
+    ("🟦 Blue",    "#003399"),
+    ("🟨 Yellow",  "#FFD700"),
+    ("⬛ Black",   "#000000"),
+    ("🩶 Grey",    "#808080"),
+    ("🟩 Green",   "#008000"),
+    ("🟫 Brown",   "#8B4513"),
 ]
 
 
@@ -52,11 +55,11 @@ def _check_deps():
     try:
         from PIL import Image  # noqa: F401
     except ImportError:
-        missing.append("Pillow  (pip install Pillow)")
+        missing.append("Pillow  →  pip install Pillow")
     try:
         from rembg import remove  # noqa: F401
     except ImportError:
-        missing.append("rembg  (pip install rembg)")
+        missing.append("rembg   →  pip install rembg")
     return missing
 
 
@@ -79,7 +82,7 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
                                 border_width=1, border_color=C["red"])
             warn.pack(fill="x", pady=(4, 10))
             ctk.CTkLabel(warn,
-                         text="⚠️  Missing dependencies:\n" + "\n".join(f"   • {m}" for m in missing),
+                         text="⚠️  Missing dependencies:\n" + "\n".join(missing),
                          font=ctk.CTkFont("Segoe UI", 11),
                          text_color=C["red"], justify="left"
                          ).pack(anchor="w", padx=14, pady=8)
@@ -89,7 +92,7 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
                               border_width=1, border_color=C["accent"])
         banner.pack(fill="x", pady=(4, 14))
         ctk.CTkLabel(banner,
-                     text="📁  Output → Desktop\\OUTPUT\\BG_Changer\\<timestamp>\\",
+                     text="📁  Output → Desktop\\OUTPUT\\BG_Changer\\<timestamp>\\output\\",
                      font=ctk.CTkFont("Segoe UI", 11),
                      text_color=C["accent"]).pack(anchor="w", padx=14, pady=8)
 
@@ -106,75 +109,67 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
                       fg_color=C["card"], hover_color=C["hover"],
                       border_color=C["border"], border_width=1,
                       text_color=C["text"],
-                      command=self._pick_photos).pack(side="right")
+                      command=self._pick_folder).pack(side="right")
 
-        # Step 2 — Resize dimensions
-        self._sec("Step 2 — Target size (mm) & DPI")
-        dim_row = ctk.CTkFrame(self, fg_color="transparent")
-        dim_row.pack(fill="x", pady=(0, 10))
+        # Step 2 — Size & DPI
+        self._sec("Step 2 — Target size & DPI")
+        dims = ctk.CTkFrame(self, fg_color="transparent")
+        dims.pack(fill="x", pady=(0, 10))
 
         for label, var_name, default, width in [
-            ("Width (mm)",  "_w_var",   "24",  70),
-            ("Height (mm)", "_h_var",   "28",  70),
-            ("DPI",         "_dpi_var", "300", 70),
+            ("Width (mm):", "_width_var",  "24",  70),
+            ("Height (mm):", "_height_var", "28",  70),
+            ("DPI:",         "_dpi_var",    "300", 70),
         ]:
-            grp = ctk.CTkFrame(dim_row, fg_color="transparent")
-            grp.pack(side="left", padx=(0, 20))
-            ctk.CTkLabel(grp, text=label,
-                         font=ctk.CTkFont("Segoe UI", 10),
-                         text_color=C["muted"]).pack(anchor="w")
-            setattr(self, var_name, ctk.StringVar(value=default))
-            ctk.CTkEntry(grp, textvariable=getattr(self, var_name),
+            ctk.CTkLabel(dims, text=label,
+                         font=ctk.CTkFont("Segoe UI", 11),
+                         text_color=C["muted"]).pack(side="left", padx=(0, 4))
+            var = ctk.StringVar(value=default)
+            setattr(self, var_name, var)
+            ctk.CTkEntry(dims, textvariable=var,
                          fg_color=C["card"], border_color=C["border"],
                          text_color=C["text"], height=34, width=width
-                         ).pack()
+                         ).pack(side="left", padx=(0, 16))
 
         # Step 3 — Background colour
         self._sec("Step 3 — Background colour")
 
-        # Preset swatches
-        swatch_row = ctk.CTkFrame(self, fg_color="transparent")
-        swatch_row.pack(fill="x", pady=(0, 8))
-        self._swatch_btns = []
-        for hex_c, name in PRESET_COLOURS:
-            btn = ctk.CTkButton(
-                swatch_row, text=name, width=72, height=30,
-                font=ctk.CTkFont("Segoe UI", 10, "bold"),
-                fg_color=hex_c,
-                hover_color=hex_c,
-                text_color="#000000" if hex_c in ("#FFFFFF", "#FFD700", "#FFA500") else "#ffffff",
-                corner_radius=6,
-                command=lambda h=hex_c: self._set_color(h))
-            btn.pack(side="left", padx=(0, 6))
-            self._swatch_btns.append(btn)
+        # Swatch grid
+        swatch_outer = ctk.CTkFrame(self, fg_color="transparent")
+        swatch_outer.pack(fill="x", pady=(0, 8))
+        for i, (label, hex_val) in enumerate(PRESETS):
+            ctk.CTkButton(
+                swatch_outer, text=label, width=110, height=32,
+                font=ctk.CTkFont("Segoe UI", 11),
+                fg_color=C["card"], hover_color=C["hover"],
+                border_color=C["border"], border_width=1,
+                text_color=C["text"],
+                command=lambda h=hex_val: self._set_color(h)
+            ).grid(row=i // 4, column=i % 4, padx=4, pady=3, sticky="ew")
+        for col in range(4):
+            swatch_outer.columnconfigure(col, weight=1)
 
-        # Custom colour row
+        # Custom hex row
         custom_row = ctk.CTkFrame(self, fg_color="transparent")
         custom_row.pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(custom_row, text="Custom hex:",
                      font=ctk.CTkFont("Segoe UI", 11),
-                     text_color=C["muted"]).pack(side="left", padx=(0, 10))
+                     text_color=C["muted"]).pack(side="left", padx=(0, 8))
         self._hex_var = ctk.StringVar(value="#FFFFFF")
-        self._hex_entry = ctk.CTkEntry(
-            custom_row, textvariable=self._hex_var,
-            fg_color=C["card"], border_color=C["border"],
-            text_color=C["text"], height=34, width=110)
-        self._hex_entry.pack(side="left")
-        ctk.CTkButton(
-            custom_row, text="Pick colour…", width=110, height=34,
-            fg_color=C["card"], hover_color=C["hover"],
-            border_color=C["border"], border_width=1,
-            text_color=C["text"],
-            command=self._pick_color
-        ).pack(side="left", padx=(8, 0))
-
-        # Live preview swatch
-        self._preview_frame = ctk.CTkFrame(
-            custom_row, width=34, height=34,
-            fg_color=self._hex_color, corner_radius=6,
-            border_width=1, border_color=C["border"])
-        self._preview_frame.pack(side="left", padx=(10, 0))
-        self._preview_frame.pack_propagate(False)
+        ctk.CTkEntry(custom_row, textvariable=self._hex_var,
+                     fg_color=C["card"], border_color=C["border"],
+                     text_color=C["text"], height=34, width=110
+                     ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(custom_row, text="🎨 Pick colour", width=120, height=34,
+                      fg_color=C["card"], hover_color=C["hover"],
+                      border_color=C["border"], border_width=1,
+                      text_color=C["text"],
+                      command=self._pick_color).pack(side="left", padx=(0, 12))
+        # Preview swatch
+        self._preview = ctk.CTkFrame(custom_row, width=34, height=34,
+                                     fg_color="#FFFFFF", corner_radius=6,
+                                     border_width=1, border_color=C["border"])
+        self._preview.pack(side="left")
 
         # Step 4 — Run
         self._sec("Step 4 — Run")
@@ -207,8 +202,9 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
         self._log_box.pack(fill="both", expand=True, pady=(0, 16))
 
     # ── Helpers ────────────────────────────────────────────────────────────────
-    def _sec(self, txt):
-        ctk.CTkLabel(self, text=txt.upper(),
+
+    def _sec(self, t):
+        ctk.CTkLabel(self, text=t.upper(),
                      font=ctk.CTkFont("Segoe UI", 10, "bold"),
                      text_color=C["muted"]).pack(anchor="w", pady=(8, 3))
 
@@ -219,133 +215,140 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
     def _set_stat(self, msg, color=None):
         self._stat.configure(text=msg, text_color=color or C["muted"])
 
-    def _pick_photos(self):
+    def _set_color(self, hex_val):
+        self._hex_color = hex_val
+        self._hex_var.set(hex_val)
+        self._preview.configure(fg_color=hex_val)
+
+    def _pick_color(self):
+        result = colorchooser.askcolor(color=self._hex_color, title="Pick Background Colour")
+        if result and result[1]:
+            self._set_color(result[1].upper())
+
+    def _pick_folder(self):
         p = filedialog.askdirectory(title="Select photos folder")
         if p:
             self._photos_folder = p
             n = sum(1 for f in os.listdir(p)
-                    if Path(f).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"})
+                    if Path(f).suffix.lower() in PHOTO_EXTS)
             self._photos_lbl.configure(
-                text=f"{os.path.basename(p)}  ({n} images)",
+                text=f"{os.path.basename(p)}  ({n} image(s) detected)",
                 text_color=C["text"])
 
-    def _set_color(self, hex_c):
-        self._hex_color = hex_c
-        self._hex_var.set(hex_c)
-        try:
-            self._preview_frame.configure(fg_color=hex_c)
-        except Exception:
-            pass
-
-    def _pick_color(self):
-        result = colorchooser.askcolor(color=self._hex_color, title="Pick background colour")
-        if result and result[1]:
-            self._set_color(result[1].upper())
-
-    # ── Run ────────────────────────────────────────────────────────────────────
     def _run(self):
         missing = _check_deps()
         if missing:
             messagebox.showerror("Missing Dependencies",
-                                 "Install required packages first:\n\n" +
-                                 "\n".join(f"  • {m}" for m in missing))
+                                 "Install missing packages:\n\n" + "\n".join(missing))
             return
         if not self._photos_folder:
             messagebox.showwarning("No Folder", "Please select a photos folder first.")
             return
-        hex_c = self._hex_var.get().strip()
-        if not hex_c.startswith("#") or len(hex_c) not in (4, 7):
-            messagebox.showwarning("Bad Colour", "Enter a valid hex colour (e.g. #FFFFFF).")
-            return
         try:
-            w   = float(self._w_var.get())
-            h   = float(self._h_var.get())
+            w   = float(self._width_var.get())
+            h   = float(self._height_var.get())
             dpi = int(self._dpi_var.get())
         except ValueError:
-            messagebox.showwarning("Bad Values", "Width, height and DPI must be numbers.")
+            messagebox.showwarning("Bad Values",
+                                   "Width, height, and DPI must be numbers.")
             return
+        hex_color = self._hex_var.get().strip()
+        if not hex_color.startswith("#"):
+            hex_color = "#" + hex_color
+        self._hex_color = hex_color
+        self._preview.configure(fg_color=hex_color)
 
         self._run_btn.configure(state="disabled", text="Processing…")
         self._log_box.delete("1.0", "end")
         self._prog.set(0)
-        self._hex_color = hex_c
         threading.Thread(
-            target=self._process, args=(hex_c, w, h, dpi), daemon=True).start()
+            target=self._process,
+            args=(w, h, dpi, hex_color),
+            daemon=True).start()
 
-    def _process(self, hex_c, w_mm, h_mm, dpi):
+    def _process(self, width_mm, height_mm, dpi, hex_color):
         from PIL import Image, ImageColor
         from rembg import remove
 
-        out_dir    = get_output_dir()
-        masked_dir = os.path.join(out_dir, "_masked_temp")
-        resize_dir = os.path.join(out_dir, "_resized_temp")
-        final_dir  = os.path.join(out_dir, "output")
-        for d in (masked_dir, resize_dir, final_dir):
+        out_dir     = get_output_dir()
+        resize_dir  = os.path.join(out_dir, "_resized_temp")
+        masked_dir  = os.path.join(out_dir, "_masked_temp")
+        output_dir  = os.path.join(out_dir, "output")
+        for d in [resize_dir, masked_dir, output_dir]:
             os.makedirs(d, exist_ok=True)
 
-        bg_rgb = ImageColor.getrgb(hex_c)
-        w_px   = int(w_mm * dpi / 25.4)
-        h_px   = int(h_mm * dpi / 25.4)
+        target_w = int(width_mm  * dpi / 25.4)
+        target_h = int(height_mm * dpi / 25.4)
+        bg_rgb   = ImageColor.getrgb(hex_color)
 
-        photos = [f for f in os.listdir(self._photos_folder)
-                  if Path(f).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}]
+        photos = [
+            f for f in os.listdir(self._photos_folder)
+            if Path(f).suffix.lower() in PHOTO_EXTS
+        ]
+
+        self._log(f"📂 Photos folder:  {os.path.basename(self._photos_folder)}")
+        self._log(f"📐 Target size:    {width_mm}×{height_mm} mm  @  {dpi} DPI  "
+                  f"→  {target_w}×{target_h} px")
+        self._log(f"🎨 BG colour:      {hex_color}")
+        self._log(f"🖼️  Images found:   {len(photos)}\n")
+
+        ok = 0
+        errors = []
 
         try:
-            self._log(f"📂 Folder:   {os.path.basename(self._photos_folder)}")
-            self._log(f"🖼️  Images:   {len(photos)}")
-            self._log(f"📐 Size:      {w_mm}mm × {h_mm}mm @ {dpi} DPI  →  {w_px}×{h_px}px")
-            self._log(f"🎨 BG colour: {hex_c}\n")
-
-            errors = 0
             for idx, fname in enumerate(photos, 1):
-                src = os.path.join(self._photos_folder, fname)
                 self._log(f"[{idx}/{len(photos)}]  {fname}")
-                self.after(0, lambda v=idx / len(photos) * 0.95: self._prog.set(v))
+                self.after(0, lambda v=idx / len(photos) * 0.9: self._prog.set(v))
 
                 try:
-                    # ── Step A: resize ─────────────────────────────────────
+                    src = os.path.join(self._photos_folder, fname)
+
+                    # ── Step A: Resize ─────────────────────────────────────
                     with Image.open(src) as img:
                         if img.mode == "RGBA":
                             img = img.convert("RGB")
-                        resized = img.resize((w_px, h_px), Image.LANCZOS)
+                        resized = img.resize((target_w, target_h), Image.LANCZOS)
                         resize_path = os.path.join(resize_dir, fname)
                         resized.save(resize_path)
 
-                    # ── Step B: remove background ──────────────────────────
+                    # ── Step B: Remove background ──────────────────────────
                     masked_path = os.path.join(masked_dir, Path(fname).stem + ".png")
-                    with open(resize_path, "rb") as f:
-                        raw = f.read()
-                    subject = remove(
-                        raw,
-                        alpha_matting=True,
-                        alpha_matting_foreground_threshold=50,
-                        post_process_mask=True,
-                    )
-                    with open(masked_path, "wb") as f:
-                        f.write(subject)
+                    with open(resize_path, "rb") as f_in:
+                        subject = remove(
+                            f_in.read(),
+                            alpha_matting=True,
+                            alpha_matting_foreground_threshold=50,
+                            discard_threshold=1e-5,
+                            shift=1e-1,
+                        )
+                    with open(masked_path, "wb") as f_out:
+                        f_out.write(subject)
 
-                    # ── Step C: composite on new background ────────────────
-                    bg   = Image.new("RGBA", (w_px, h_px), bg_rgb + (255,))
-                    fg   = Image.open(masked_path).convert("RGBA").resize((w_px, h_px))
+                    # ── Step C: Composite onto solid colour ────────────────
+                    bg   = Image.new("RGBA", (target_w, target_h),
+                                     bg_rgb + (255,))
+                    fg   = Image.open(masked_path).convert("RGBA")
+                    fg   = fg.resize((target_w, target_h), Image.LANCZOS)
                     comp = Image.alpha_composite(bg, fg)
+
                     out_name = Path(fname).stem + ".png"
-                    comp.save(os.path.join(final_dir, out_name), "PNG")
-                    self._log(f"   ✅ Saved: {out_name}")
+                    comp.save(os.path.join(output_dir, out_name), "PNG")
+                    self._log(f"   ✅  Saved: {out_name}")
+                    ok += 1
 
                 except Exception as e:
-                    self._log(f"   ❌ Failed: {e}")
-                    errors += 1
+                    self._log(f"   ❌  Error: {e}")
+                    errors.append(fname)
 
             self.after(0, lambda: self._prog.set(1))
-            ok = len(photos) - errors
-            self._log(f"\n🏁 Done!  {ok} succeeded · {errors} failed → {final_dir}")
+            self._log(f"\n🏁 Done!  {ok} succeeded  ·  {len(errors)} failed  →  {output_dir}")
             self.after(0, lambda: self._set_stat(
-                f"Done! {ok}/{len(photos)} images processed.", C["green"]))
-            subprocess.Popen(["explorer", final_dir])
+                f"Done! {ok} image(s) processed · {len(errors)} error(s).", C["green"]))
+            subprocess.Popen(["explorer", output_dir])
 
         except Exception as e:
             err = str(e)
-            self._log(f"\n💥 Error: {err}")
+            self._log(f"\n💥 Fatal error: {err}")
             self.after(0, lambda: self._set_stat(f"Error: {err}", C["red"]))
         finally:
             self.after(0, lambda: self._run_btn.configure(
@@ -363,8 +366,8 @@ class BgChangerPanel(ctk.CTkFrame):
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Photo Background Changer")
-        self.geometry("820x820")
+        self.title("BG Changer")
+        self.geometry("820x860")
         self.configure(fg_color=C["bg"])
 
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)
@@ -382,10 +385,11 @@ class App(ctk.CTk):
 
         tx = ctk.CTkFrame(inn, fg_color="transparent")
         tx.pack(side="left")
-        ctk.CTkLabel(tx, text="Photo Background Changer",
+        ctk.CTkLabel(tx, text="BG Changer",
                      font=ctk.CTkFont("Segoe UI", 17, "bold"),
                      text_color=C["text"]).pack(anchor="w")
-        ctk.CTkLabel(tx, text="Resize to exact mm · remove background with AI · apply new colour",
+        ctk.CTkLabel(tx,
+                     text="Resize → AI background removal (rembg) → solid colour composite",
                      font=ctk.CTkFont("Segoe UI", 11),
                      text_color=C["muted"]).pack(anchor="w")
 
