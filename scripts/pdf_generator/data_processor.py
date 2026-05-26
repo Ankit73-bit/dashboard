@@ -27,7 +27,7 @@ def log_memory_usage(prefix: str = "") -> None:
 
 
 def prepare_images(content: str, temp_dir: str, output_folder: str) -> None:
-    image_pattern = re.compile(r'#image\("([^"]+)"')
+    image_pattern = re.compile(r'(?:#)?image\("([^"]+)"')
     image_matches = set(image_pattern.findall(content))
     for img_name in image_matches:
         possible_sources = [
@@ -150,6 +150,11 @@ def process_in_chunks(
                     srno = row.get("SrNo", 0)
                     try:
                         result = future.result()
+                        if result is None or (isinstance(result, list) and not result):
+                            raise RuntimeError(
+                                f"PDF generation returned no output for row {chunk_start + idx} "
+                                f"(id={row_id!r}). Check logs above for the root cause."
+                            )
                         if isinstance(result, list):
                             for pdf_path in result:
                                 if pdf_path:
@@ -161,7 +166,9 @@ def process_in_chunks(
                             with open(state_path, 'w') as f:
                                 json.dump({'last_processed_index': chunk_start + idx, 'processed_ids': processed_ids}, f)
                     except Exception as e:
-                        logging.error(f"Error processing row {chunk_start + idx}: {e}")
+                        logging.error(f"Error processing row {chunk_start + idx} (id={row_id!r}): {e}")
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise
 
             last_processed_index = chunk_start + len(chunk) - 1
             with open(state_path, 'w') as f:

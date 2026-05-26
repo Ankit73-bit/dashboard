@@ -7,8 +7,10 @@ import os
 import sys
 import json
 import shutil
+import subprocess
 import threading
 import logging
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from multiprocessing import cpu_count
@@ -29,6 +31,17 @@ BASE_DIR = _THIS_DIR  # working dir for relative paths inside the pipeline UI
 
 DESKTOP  = os.path.join(os.path.expanduser("~"), "Desktop")
 BASE_OUT = os.path.join(DESKTOP, "OUTPUT", "PDF_Generator")
+
+
+def get_run_output_dirs(out_name: str = "OUTPUT", merge_name: str = "MERGE_PDF"):
+    """Create a timestamped run folder with OUTPUT and MERGE_PDF subfolders."""
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = os.path.join(BASE_OUT, ts)
+    output_dir = os.path.join(run_dir, out_name or "OUTPUT")
+    merge_dir = os.path.join(run_dir, merge_name or "MERGE_PDF")
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(merge_dir, exist_ok=True)
+    return output_dir, merge_dir, run_dir
 
 
 # ───────────────────────────────────────────────────────────────
@@ -164,7 +177,7 @@ class TypstApp(tk.Tk):
         out_banner.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(4, 2))
         tk.Label(
             out_banner,
-            text=f"📁  Output → Desktop\\OUTPUT\\PDF_Generator\\<folder name>",
+            text=f"📁  Output → Desktop\\OUTPUT\\PDF_Generator\\<timestamp>\\<folder name>",
             bg="#082a12", fg="#30d158", font=("Segoe UI", 9, "italic")
         ).pack(anchor="w")
 
@@ -468,7 +481,7 @@ class TypstApp(tk.Tk):
         self._log_box.delete("1.0", tk.END)
         self._log_box.configure(state="disabled")
 
-    def _build_config_dict(self) -> dict:
+    def _build_config_dict(self, output_dir: str = None, merge_dir: str = None) -> dict:
         templates = self._load_templates_from_folder()
         if not templates:
             raise ValueError(
@@ -478,13 +491,18 @@ class TypstApp(tk.Tk):
         out_name   = self._output_var.get().strip() or "OUTPUT"
         merge_name = self._merge_var.get().strip()  or "MERGE_PDF"
 
+        if output_dir is None:
+            output_dir = os.path.join(BASE_OUT, out_name)
+        if merge_dir is None:
+            merge_dir = os.path.join(BASE_OUT, merge_name)
+
         return {
             "paths": {
                 "data":      self._data_var.get().strip(),
                 "config":    self._config_var.get().strip(),
                 "templates": templates,
-                "output":    os.path.join(BASE_OUT, out_name),
-                "merge":     os.path.join(BASE_OUT, merge_name),
+                "output":    output_dir,
+                "merge":     merge_dir,
                 "images":    self._images_var.get().strip(),
             },
             "processing": {
@@ -569,12 +587,21 @@ class TypstApp(tk.Tk):
 
     def _run_pipeline(self):
         try:
-            cfg_dict = self._build_config_dict()
+            out_name = self._output_var.get().strip() or "OUTPUT"
+            merge_name = self._merge_var.get().strip() or "MERGE_PDF"
+            output_dir, merge_dir, run_dir = get_run_output_dirs(out_name, merge_name)
+            cfg_dict = self._build_config_dict(output_dir=output_dir, merge_dir=merge_dir)
         except ValueError as e:
             messagebox.showerror("Validation error", str(e))
             return
 
+        data_path = cfg_dict["paths"]["data"]
+        if not data_path or not os.path.isfile(data_path):
+            messagebox.showwarning("No File", "Please select a data file (.xlsx / .csv) first.")
+            return
+
         self._status_var.set("⏳  Running…")
+        logging.info(f"Run folder: {run_dir}")
 
         def _worker():
             try:
@@ -582,11 +609,14 @@ class TypstApp(tk.Tk):
                 from pdf_generator.logging_config import setup_logging
                 from pdf_generator.main import main as run_main
 
+                # Attach the file handler immediately so every log line
+                # (including config errors) lands in the log file.
+                log_path = setup_logging(output_folder=run_dir)
+                logging.info(f"Log file: {log_path}")
+
                 config = AppConfig.from_dict(cfg_dict)
-                setup_logging(output_folder=config.paths.output)
 
                 if config.paths.images and os.path.exists(config.paths.images):
-                    os.makedirs(config.paths.output, exist_ok=True)
                     for img in os.listdir(config.paths.images):
                         src = os.path.join(config.paths.images, img)
                         dst = os.path.join(config.paths.output, img)
@@ -594,10 +624,27 @@ class TypstApp(tk.Tk):
                             shutil.copy(src, dst)
 
                 run_main(config)
-                self.after(0, lambda: self._status_var.set("✅  Done"))
+
+                def _on_success():
+                    self._status_var.set("✅  Done")
+                    subprocess.Popen(["explorer", run_dir])
+                    messagebox.showinfo(
+                        "Complete",
+                        "PDF pipeline finished successfully.\n\n"
+                        f"Run folder:\n{run_dir}\n\n"
+                        f"PDFs:\n{output_dir}\n\n"
+                        f"Merged PDFs:\n{merge_dir}",
+                    )
+
+                self.after(0, _on_success)
             except Exception as e:
                 logging.error(f"Pipeline error: {e}", exc_info=True)
-                self.after(0, lambda err=e: self._status_var.set(f"❌  Failed: {err}"))
+
+                def _on_failure(err=e):
+                    self._status_var.set(f"❌  Failed: {err}")
+                    messagebox.showerror("Pipeline Failed", str(err))
+
+                self.after(0, _on_failure)
 
         threading.Thread(target=_worker, daemon=True).start()
 

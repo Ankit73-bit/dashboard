@@ -11,6 +11,9 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 
 
+IMAGE_PATH_PATTERN = re.compile(r'(?:#)?image\("([^"]+)"')
+
+
 def normalize_placeholders(content: str) -> str:
     return re.sub(
         r'\{\{\s*([^}]+?)\s*\}\}',
@@ -53,7 +56,7 @@ def prepare_all_images(
 ) -> None:
     all_images = set()
     for content in template_dict.values():
-        all_images.update(re.findall(r'#image\("([^\"]+)"', content))
+        all_images.update(IMAGE_PATH_PATTERN.findall(content))
 
     search_dirs = [output_folder, os.path.dirname(output_folder)]
     if extra_search_dirs:
@@ -79,7 +82,11 @@ def prepare_all_images(
                 except Exception as e:
                     logging.warning(f"Failed to copy image {img_name} from {search_dir}: {e}")
         if not copied:
-            logging.warning(f"Image not found in any search path: {img_name}")
+            logging.error(f"Image not found in any search path: {img_name}")
+            raise FileNotFoundError(
+                f"Required image not found: {img_name} "
+                f"(searched in {', '.join(search_dirs)})"
+            )
 
 
 def get_template_for_row(row: pd.Series, template_dict: Dict[str, str], default_template: str) -> str:
@@ -135,11 +142,11 @@ def resolve_output_id(row: pd.Series, notice_config: Dict[str, Any]) -> Tuple[st
 
 
 def fix_image_paths(content: str) -> str:
-    return re.sub(
-        r'#image\("([^\"]+)"',
-        lambda m: f'#image("{os.path.basename(m.group(1))}"',
-        content
-    )
+    def _repl(m: re.Match) -> str:
+        prefix = "#image" if m.group(0).startswith("#") else "image"
+        return f'{prefix}("{os.path.basename(m.group(1))}"'
+
+    return IMAGE_PATH_PATTERN.sub(_repl, content)
 
 
 def apply_pdf_password_protection(pdf_path: str, password: str) -> None:

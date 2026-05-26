@@ -306,7 +306,7 @@ SERVICES = [
             "steps": [
                 ("Select your data file", "Click '…' next to 'Data file' and choose your .xlsx or .csv file. Each row becomes one PDF."),
                 ("Select Notice Config (optional)", "If your templates use a JSON config (date formats, table definitions, decimal fields), browse and select it here. Leave blank for simple templates."),
-                ("Set output folders", "The 'Output folder' is where individual PDFs are saved. 'Merge folder' is where batched merged PDFs go. Both default to folders inside the scripts directory."),
+                ("Set output folders", "Choose subfolder names for individual PDFs (default OUTPUT) and merged batches (default MERGE_PDF). Each run creates a new timestamped folder on your Desktop."),
                 ("Select template folder", "Click '…' next to 'Template folder' and choose the folder containing your .typ files and a template.json mapping file. The preview box will show all state/language → file mappings."),
                 ("Configure template.json", 'Inside your template folder, create a template.json with a `template_dict` key: {"DEFAULT": "default.typ", "HINDI": "hindi.typ", ...}. The DEFAULT key is required.'),
                 ("Set processing options", "Toggle 'Generate PDFs' and 'Merge PDFs' as needed. Adjust chunk size, batch size, max workers, and memory limit for your machine."),
@@ -318,10 +318,11 @@ SERVICES = [
                 "Column names in your Excel map directly to {{ColumnName}} placeholders in the .typ template.",
                 "The pipeline resumes automatically if interrupted — it saves state after every 10 rows.",
                 "Use 'Save Config' to export your current settings to a JSON file, then 'Load Config' on the next run.",
-                "Output PDFs are saved in the Output folder. Merged batches go in the Merge folder. S3 uploads happen after merging.",
+                "Each run creates a new timestamped folder under Desktop\\OUTPUT\\PDF_Generator so previous runs are never overwritten.",
+                "Output PDFs are saved in the OUTPUT subfolder. Merged batches go in MERGE_PDF. S3 uploads happen after merging.",
                 "AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET_NAME) should be in a .env file in the scripts folder.",
             ],
-            "output": "Desktop\\OUTPUT\\  (individual PDFs)  |  MERGE_PDF\\  (batched merges)",
+            "output": "Desktop\\OUTPUT\\PDF_Generator\\YYYY-MM-DD_HH-MM-SS\\OUTPUT\\  |  …\\MERGE_PDF\\",
         },
     },
     {
