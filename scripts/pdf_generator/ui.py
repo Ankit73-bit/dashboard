@@ -118,6 +118,10 @@ class TypstApp(tk.Tk):
         self.geometry("900x820")
         self.minsize(820, 700)
         self.configure(bg=self.BG)
+        self._control = None
+        self._pipeline_running = False
+        self._paused = False
+        self._current_run = None
         self._build()
         self._attach_logger()
 
@@ -337,19 +341,59 @@ class TypstApp(tk.Tk):
         tk.Label(bar, textvariable=self._status_var, bg="#14141f", fg=self.ACC,
                  font=("Segoe UI", 10, "italic")).pack(side="left", padx=16)
 
+        self._run_btn = tk.Button(
+            bar, text="▶   Run Pipeline", command=self._run_pipeline,
+            bg=self.ACC, fg="#ffffff", relief="flat",
+            font=("Segoe UI", 10, "bold"), padx=14, pady=6,
+            activebackground="#5a48d0", activeforeground="#ffffff",
+            cursor="hand2",
+        )
+        self._run_btn.pack(side="right", padx=(0, 10))
+
+        self._btn_restart = tk.Button(
+            bar, text="🔄  Restart", command=self._restart_pipeline,
+            bg="#3d3d55", fg="#ffffff", relief="flat",
+            font=("Segoe UI", 10), padx=10, pady=6, state="disabled",
+            activebackground="#555570", activeforeground="#ffffff",
+            cursor="hand2",
+        )
+        self._btn_restart.pack(side="right", padx=(0, 6))
+
+        self._btn_stop = tk.Button(
+            bar, text="⏹  Stop", command=self._stop_pipeline,
+            bg="#3d3d55", fg="#ffffff", relief="flat",
+            font=("Segoe UI", 10), padx=10, pady=6, state="disabled",
+            activebackground="#555570", activeforeground="#ffffff",
+            cursor="hand2",
+        )
+        self._btn_stop.pack(side="right", padx=(0, 6))
+
+        self._btn_resume = tk.Button(
+            bar, text="▶  Resume", command=self._resume_pipeline,
+            bg="#3d3d55", fg="#ffffff", relief="flat",
+            font=("Segoe UI", 10), padx=10, pady=6, state="disabled",
+            activebackground="#555570", activeforeground="#ffffff",
+            cursor="hand2",
+        )
+        self._btn_resume.pack(side="right", padx=(0, 6))
+
+        self._btn_pause = tk.Button(
+            bar, text="⏸  Pause", command=self._pause_pipeline,
+            bg="#3d3d55", fg="#ffffff", relief="flat",
+            font=("Segoe UI", 10), padx=10, pady=6, state="disabled",
+            activebackground="#555570", activeforeground="#ffffff",
+            cursor="hand2",
+        )
+        self._btn_pause.pack(side="right", padx=(0, 6))
+
         for txt, cmd in [
             ("📂  Load Config",  self._load_config),
             ("💾  Save Config",  self._save_config),
-            ("▶   Run Pipeline", self._run_pipeline),
         ]:
-            is_run = "Run" in txt
             tk.Button(bar, text=txt, command=cmd,
-                      bg=self.ACC if is_run else "#3d3d55",
-                      fg="#ffffff", relief="flat",
-                      font=("Segoe UI", 10, "bold" if is_run else "normal"),
-                      padx=14, pady=6,
-                      activebackground="#5a48d0" if is_run else "#555570",
-                      activeforeground="#ffffff",
+                      bg="#3d3d55", fg="#ffffff", relief="flat",
+                      font=("Segoe UI", 10), padx=14, pady=6,
+                      activebackground="#555570", activeforeground="#ffffff",
                       cursor="hand2").pack(side="right", padx=(0, 10))
 
     # ── Template folder helpers ──
@@ -481,6 +525,66 @@ class TypstApp(tk.Tk):
         self._log_box.delete("1.0", tk.END)
         self._log_box.configure(state="disabled")
 
+    def _set_pipeline_buttons(self, running: bool = False, paused: bool = False) -> None:
+        self._run_btn.configure(state="disabled" if running else "normal")
+        self._btn_pause.configure(state="normal" if running and not paused else "disabled")
+        self._btn_resume.configure(state="normal" if running and paused else "disabled")
+        self._btn_stop.configure(state="normal" if running else "disabled")
+        self._btn_restart.configure(state="normal" if running else "normal")
+
+    def _on_control_event(self, event: str) -> None:
+        if event == "paused":
+            self._paused = True
+            self._status_var.set("⏸  Paused")
+            self._set_pipeline_buttons(running=True, paused=True)
+        elif event == "resumed":
+            self._paused = False
+            self._status_var.set("⏳  Running…")
+            self._set_pipeline_buttons(running=True, paused=False)
+
+    def _pause_pipeline(self) -> None:
+        if not self._pipeline_running or self._paused or not self._control:
+            return
+        messagebox.showinfo(
+            "Pause",
+            "The process will pause after completing the current batch.",
+        )
+        self._control.request_pause()
+        self._status_var.set("⏸  Pausing after current batch…")
+
+    def _resume_pipeline(self) -> None:
+        if not self._pipeline_running or not self._paused or not self._control:
+            return
+        self._control.resume()
+        self._paused = False
+        self._status_var.set("⏳  Running…")
+        self._set_pipeline_buttons(running=True, paused=False)
+
+    def _stop_pipeline(self) -> None:
+        if not self._pipeline_running or not self._control:
+            return
+        messagebox.showinfo(
+            "Stop",
+            "The process will stop after completing the current batch.",
+        )
+        self._control.request_stop()
+        self._status_var.set("⏹  Stopping after current batch…")
+
+    def _restart_pipeline(self) -> None:
+        if self._pipeline_running:
+            if not self._control:
+                return
+            messagebox.showinfo(
+                "Restart",
+                "The process will restart after completing the current batch.\n\n"
+                "All PDFs and progress in this run will be cleared, "
+                "then processing will start from the beginning.",
+            )
+            self._control.request_restart()
+            self._status_var.set("🔄  Restarting after current batch…")
+        else:
+            self._run_pipeline(clear_first=True, reuse_run=True)
+
     def _build_config_dict(self, output_dir: str = None, merge_dir: str = None) -> dict:
         templates = self._load_templates_from_folder()
         if not templates:
@@ -585,11 +689,41 @@ class TypstApp(tk.Tk):
         self._toggle_upload_fields()
         messagebox.showinfo("Loaded", "Configuration applied.")
 
-    def _run_pipeline(self):
+    def _run_pipeline(self, clear_first: bool = False, reuse_run: bool = False):
+        if self._pipeline_running:
+            return
+
         try:
             out_name = self._output_var.get().strip() or "OUTPUT"
             merge_name = self._merge_var.get().strip() or "MERGE_PDF"
-            output_dir, merge_dir, run_dir = get_run_output_dirs(out_name, merge_name)
+
+            if not reuse_run and not clear_first and self._current_run:
+                state_path = os.path.join(
+                    self._current_run["output"], "state", "processing_state.json"
+                )
+                if os.path.isfile(state_path):
+                    ans = messagebox.askyesnocancel(
+                        "Resume previous run?",
+                        f"Saved progress was found in:\n{self._current_run['run_dir']}\n\n"
+                        "Yes — resume this run\n"
+                        "No — start a new timestamped run\n"
+                        "Cancel",
+                    )
+                    if ans is None:
+                        return
+                    if ans:
+                        reuse_run = True
+                    else:
+                        self._current_run = None
+
+            if reuse_run and self._current_run:
+                output_dir = self._current_run["output"]
+                merge_dir = self._current_run["merge"]
+                run_dir = self._current_run["run_dir"]
+                os.makedirs(output_dir, exist_ok=True)
+                os.makedirs(merge_dir, exist_ok=True)
+            else:
+                output_dir, merge_dir, run_dir = get_run_output_dirs(out_name, merge_name)
             cfg_dict = self._build_config_dict(output_dir=output_dir, merge_dir=merge_dir)
         except ValueError as e:
             messagebox.showerror("Validation error", str(e))
@@ -600,43 +734,96 @@ class TypstApp(tk.Tk):
             messagebox.showwarning("No File", "Please select a data file (.xlsx / .csv) first.")
             return
 
+        if clear_first:
+            from pdf_generator.pipeline_control import clear_run_output
+            clear_run_output(output_dir, merge_dir)
+
+        self._current_run = {
+            "output": output_dir,
+            "merge": merge_dir,
+            "run_dir": run_dir,
+        }
+        self._pipeline_running = True
+        self._paused = False
+        self._set_pipeline_buttons(running=True)
         self._status_var.set("⏳  Running…")
         logging.info(f"Run folder: {run_dir}")
 
         def _worker():
+            from pdf_generator.config import AppConfig
+            from pdf_generator.logging_config import setup_logging
+            from pdf_generator.main import main as run_main
+            from pdf_generator.pipeline_control import (
+                PipelineRestart,
+                PipelineStopped,
+                clear_run_output,
+                reset_control,
+            )
+
+            control = reset_control()
+            self._control = control
+            control.set_status_callback(
+                lambda event: self.after(0, lambda e=event: self._on_control_event(e))
+            )
+
             try:
-                from pdf_generator.config import AppConfig
-                from pdf_generator.logging_config import setup_logging
-                from pdf_generator.main import main as run_main
+                while True:
+                    try:
+                        log_path = setup_logging(output_folder=run_dir)
+                        logging.info(f"Log file: {log_path}")
 
-                # Attach the file handler immediately so every log line
-                # (including config errors) lands in the log file.
-                log_path = setup_logging(output_folder=run_dir)
-                logging.info(f"Log file: {log_path}")
+                        config = AppConfig.from_dict(cfg_dict)
 
-                config = AppConfig.from_dict(cfg_dict)
+                        if config.paths.images and os.path.exists(config.paths.images):
+                            for img in os.listdir(config.paths.images):
+                                src = os.path.join(config.paths.images, img)
+                                dst = os.path.join(config.paths.output, img)
+                                if os.path.isfile(src):
+                                    shutil.copy(src, dst)
 
-                if config.paths.images and os.path.exists(config.paths.images):
-                    for img in os.listdir(config.paths.images):
-                        src = os.path.join(config.paths.images, img)
-                        dst = os.path.join(config.paths.output, img)
-                        if os.path.isfile(src):
-                            shutil.copy(src, dst)
+                        run_main(config, control=control)
 
-                run_main(config)
+                        def _on_success():
+                            self._current_run = None
+                            self._status_var.set("✅  Done")
+                            subprocess.Popen(["explorer", run_dir])
+                            messagebox.showinfo(
+                                "Complete",
+                                "PDF pipeline finished successfully.\n\n"
+                                f"Run folder:\n{run_dir}\n\n"
+                                f"PDFs:\n{output_dir}\n\n"
+                                f"Merged PDFs:\n{merge_dir}",
+                            )
 
-                def _on_success():
-                    self._status_var.set("✅  Done")
-                    subprocess.Popen(["explorer", run_dir])
-                    messagebox.showinfo(
-                        "Complete",
-                        "PDF pipeline finished successfully.\n\n"
-                        f"Run folder:\n{run_dir}\n\n"
-                        f"PDFs:\n{output_dir}\n\n"
-                        f"Merged PDFs:\n{merge_dir}",
-                    )
+                        self.after(0, _on_success)
+                        break
 
-                self.after(0, _on_success)
+                    except PipelineRestart:
+                        clear_run_output(output_dir, merge_dir)
+                        control = reset_control()
+                        self._control = control
+                        control.set_status_callback(
+                            lambda event: self.after(0, lambda e=event: self._on_control_event(e))
+                        )
+                        self._paused = False
+                        logging.info("Restarting pipeline from the beginning…")
+                        self.after(0, lambda: self._status_var.set("🔄  Restarting…"))
+                        self.after(0, lambda: self._set_pipeline_buttons(running=True))
+                        continue
+
+                    except PipelineStopped:
+                        def _on_stopped():
+                            self._status_var.set("⏹  Stopped")
+                            messagebox.showinfo(
+                                "Stopped",
+                                "Pipeline stopped after the current batch.\n\n"
+                                "Progress was saved. Click Run to resume from the "
+                                "last completed batch in this run folder.",
+                            )
+
+                        self.after(0, _on_stopped)
+                        break
+
             except Exception as e:
                 logging.error(f"Pipeline error: {e}", exc_info=True)
 
@@ -645,6 +832,11 @@ class TypstApp(tk.Tk):
                     messagebox.showerror("Pipeline Failed", str(err))
 
                 self.after(0, _on_failure)
+            finally:
+                self._pipeline_running = False
+                self._paused = False
+                self._control = None
+                self.after(0, lambda: self._set_pipeline_buttons(running=False))
 
         threading.Thread(target=_worker, daemon=True).start()
 

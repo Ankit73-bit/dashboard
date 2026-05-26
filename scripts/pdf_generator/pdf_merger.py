@@ -5,7 +5,12 @@ import pandas as pd
 from PyPDF2 import PdfMerger, PdfReader
 import gc
 import psutil
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
+
+from pdf_generator.pipeline_control import PipelineRestart, PipelineStopped
+
+if TYPE_CHECKING:
+    from pdf_generator.pipeline_control import PipelineControl
 from contextlib import contextmanager
 import tempfile
 import shutil
@@ -140,7 +145,8 @@ def merge_pdfs(
     template_path: str,
     batch_size: int = 500,
     generate_missing: bool = True,
-    max_workers: int = max(1, os.cpu_count() - 2)
+    max_workers: int = max(1, os.cpu_count() - 2),
+    control: Optional["PipelineControl"] = None,
 ) -> List[str]:
     processed_ids = sorted(processed_ids, key=lambda x: int(x[0]) if processed_ids else [])
     processed_ids = [t[1] for t in processed_ids]
@@ -167,33 +173,40 @@ def merge_pdfs(
         processed_ids = [t[1] for t in processed_ids]
 
     total_batches = (len(processed_ids) + batch_size - 1) // batch_size
-    batch_data = []
+    merged_files = []
+
     for batch_idx in range(total_batches):
         batch_id = f"batch_{batch_idx + 1}"
         if batch_id in completed_batches:
             logging.info(f"Skipping already completed {batch_id}")
             continue
+
+        if control:
+            control.wait_before_batch()
+
         start_idx = batch_idx * batch_size
         end_idx = min(start_idx + batch_size, len(processed_ids))
         batch_ids = processed_ids[start_idx:end_idx]
-        batch_data.append((
+        batch_data = (
             batch_idx, batch_ids, output_folder, merge_folder,
             typst_content, notice_config, template_path, generate_missing
-        ))
+        )
 
-    merged_files = []
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_batch, data) for data in batch_data]
-        for future in concurrent.futures.as_completed(futures):
-            try:
+        try:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                future = executor.submit(process_batch, batch_data)
                 batch_id, merged_path = future.result()
-                if merged_path:
-                    merged_files.append(merged_path)
-                    completed_batches.add(batch_id)
-                    with open(state_path, 'w') as f:
-                        json.dump({'completed_batches': list(completed_batches)}, f)
-            except Exception as e:
-                logging.error(f"Error processing batch: {e}")
+            if merged_path:
+                merged_files.append(merged_path)
+                completed_batches.add(batch_id)
+                with open(state_path, 'w') as f:
+                    json.dump({'completed_batches': list(completed_batches)}, f)
+        except Exception as e:
+            logging.error(f"Error processing {batch_id}: {e}")
+            raise
+
+        if control:
+            control.on_batch_complete(phase="merge batch")
 
     merged_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
     return merged_files

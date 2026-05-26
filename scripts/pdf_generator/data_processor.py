@@ -7,7 +7,12 @@ import gc
 import psutil
 import json
 import concurrent.futures
-from typing import Callable, Dict, Any, Optional, List
+from typing import Callable, Dict, Any, Optional, List, TYPE_CHECKING
+
+from pdf_generator.pipeline_control import PipelineRestart, PipelineStopped
+
+if TYPE_CHECKING:
+    from pdf_generator.pipeline_control import PipelineControl
 
 
 def convert_excel_to_csv(excel_file):
@@ -92,7 +97,8 @@ def process_in_chunks(
     state_file: str = "processing_state.json",
     enable_password: bool = False,
     password_field: Optional[str] = None,
-    images_folder: Optional[str] = None
+    images_folder: Optional[str] = None,
+    control: Optional["PipelineControl"] = None,
 ) -> Optional[List[tuple]]:
 
     temp_dir = os.path.join(output_folder, "temp_shared")
@@ -127,6 +133,9 @@ def process_in_chunks(
         )
 
         for chunk_idx, chunk in enumerate(df_reader):
+            if control:
+                control.wait_before_batch()
+
             chunk_start = last_processed_index + 1
             logging.info(f"Processing chunk {chunk_idx+1} (rows {chunk_start}-{chunk_start + len(chunk) - 1})")
 
@@ -176,8 +185,13 @@ def process_in_chunks(
             gc.collect()
             log_memory_usage(f"After chunk {chunk_idx+1}")
 
+            if control:
+                control.on_batch_complete(phase="chunk")
+
         return processed_ids
 
+    except (PipelineStopped, PipelineRestart):
+        raise
     except Exception as e:
         logging.error(f"Processing failed: {e}")
         if 'last_processed_index' in locals():

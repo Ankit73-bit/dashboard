@@ -18,12 +18,20 @@ from pdf_generator.pdf_generator import process_row
 from pdf_generator.pdf_merger import merge_pdfs
 from pdf_generator.memory_monitor import MemoryMonitor
 from pdf_generator.s3_uploader import upload_files_to_s3
+from pdf_generator.pipeline_control import (
+    PipelineControl,
+    PipelineRestart,
+    PipelineStopped,
+    get_control,
+)
 
 
 @contextmanager
 def error_recovery_context(config):
     try:
         yield
+    except (PipelineStopped, PipelineRestart):
+        raise
     except Exception as e:
         logging.error(f"Error in processing: {e}")
         logging.error(traceback.format_exc())
@@ -32,11 +40,12 @@ def error_recovery_context(config):
         raise
 
 
-def main(config: AppConfig = None):
+def main(config: AppConfig = None, control: PipelineControl = None):
     """Run the PDF generation pipeline with a given AppConfig."""
     if not config:
         raise ValueError("config must be provided — use the UI to build and pass AppConfig.")
 
+    control = control or get_control()
     memory_monitor = MemoryMonitor(
         warning_threshold_mb=config.processing.max_memory_mb * 0.7,
         critical_threshold_mb=config.processing.max_memory_mb
@@ -101,7 +110,8 @@ def main(config: AppConfig = None):
                     default_template=default_template,
                     enable_password=config.processing.pdf_protection.enabled,
                     password_field=config.processing.pdf_protection.password_field,
-                    images_folder=config.paths.images or None
+                    images_folder=config.paths.images or None,
+                    control=control,
                 )
             log_memory_usage("After PDF generation")
             gc.collect()
@@ -118,7 +128,8 @@ def main(config: AppConfig = None):
                     template_path=list(config.paths.templates.values())[0],
                     batch_size=config.processing.batch_size,
                     generate_missing=True,
-                    max_workers=config.processing.max_workers
+                    max_workers=config.processing.max_workers,
+                    control=control,
                 )
             log_memory_usage("After merging")
 
@@ -130,6 +141,8 @@ def main(config: AppConfig = None):
 
         logging.info("Process completed successfully")
 
+    except (PipelineStopped, PipelineRestart):
+        raise
     except Exception as e:
         logging.error(f"Fatal error: {e}")
         logging.error(traceback.format_exc())
