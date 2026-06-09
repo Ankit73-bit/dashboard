@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 def convert_excel_to_csv(excel_file):
     try:
-        df = pd.read_excel(excel_file)
+        df = pd.read_excel(excel_file, dtype=str)
         csv_file = os.path.splitext(excel_file)[0] + ".csv"
         df.to_csv(csv_file, index=False)
         return csv_file
