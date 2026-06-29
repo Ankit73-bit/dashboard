@@ -158,11 +158,12 @@ def process_in_chunks(
                     row_id, _ = resolve_output_id(row, notice_config)
                     srno = row.get("SrNo", 0)
                     try:
-                        result = future.result()
+                        result = future.result()  # raises if process_row raised
                         if result is None or (isinstance(result, list) and not result):
                             raise RuntimeError(
                                 f"PDF generation returned no output for row {chunk_start + idx} "
-                                f"(id={row_id!r}). Check logs above for the root cause."
+                                f"(id={row_id!r}). No exception was raised — the row may have "
+                                f"been silently skipped (missing ID or empty template)."
                             )
                         if isinstance(result, list):
                             for pdf_path in result:

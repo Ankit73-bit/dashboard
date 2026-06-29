@@ -268,7 +268,7 @@ def process_row(
         return pdf_path
     except Exception as e:
         logging.error(f"Error generating PDF for {cuid}: {e}")
-        return None
+        raise
     finally:
         try:
             if os.path.exists(typ_path):
