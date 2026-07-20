@@ -384,6 +384,33 @@ SERVICES = [
         },
     },
     {
+        "title":       "Tracking PDF Matcher",
+        "sample":      None,
+        "description": "Match Excel barcodes to tracking PDFs, copy them into each batch folder, and merge into MERGED.pdf.",
+        "icon":        "🔗",
+        "accent":      C["purple"],
+        "tag":         "PDF · Excel · Tracking",
+        "script":      os.path.join(SCRIPTS, "rbl_match.py"),
+        "docs": {
+            "what": "Walks a main batch folder tree looking for Excel files that have a barcode, tracking, or article column. For each match, it copies the corresponding <barcode>.pdf files from a tracking PDFs folder into a Tracking subfolder, then merges them into MERGED.pdf. A run summary and missing list are also saved to Desktop OUTPUT.",
+            "when": "Use this when you have batch folders with Excel barcode lists and a separate folder of individual tracking PDFs named by barcode — for example RBL or courier tracking slip matching.",
+            "steps": [
+                ("Open the tool", "Click 'Launch →' on the Tracking PDF Matcher card from the Home screen."),
+                ("Select main batch folder", "Click 'Browse…' and pick the root folder that contains your batch subfolders and Excel files."),
+                ("Select tracking PDFs folder", "Click 'Browse…' and pick the folder where individual tracking PDFs live (each named <barcode>.pdf)."),
+                ("Click 'Match & Merge Tracking PDFs'", "The tool walks every subfolder, finds Excel barcode columns, copies matching PDFs, and writes MERGED.pdf into each batch's Tracking folder."),
+                ("Review results", "Check each batch's Tracking folder for copied PDFs and MERGED.pdf. Open the Desktop OUTPUT folder for summary.txt and missing.txt."),
+            ],
+            "tips": [
+                "The Excel column is detected automatically if its name contains 'barcode', 'tracking', or 'article' (case-insensitive).",
+                "Tracking PDFs must be named exactly <barcode>.pdf to match.",
+                "Existing Tracking folders inside the tree are skipped so previous output is not re-processed as input.",
+                "Missing barcodes are listed in missing.txt in the OUTPUT run folder.",
+            ],
+            "output": "<batch folder>\\Tracking\\MERGED.pdf  |  Desktop\\OUTPUT\\Tracking_PDF_Matcher\\YYYY-MM-DD_HH-MM-SS\\",
+        },
+    },
+    {
         "title":       "S3 File Uploader",
         "sample":      None,
         "description": "Upload single or multiple files and folders to Amazon S3 with file type filtering.",
