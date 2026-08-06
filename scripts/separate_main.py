@@ -92,8 +92,8 @@ class ExcelCuidSeparatorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Excel CUID Separator")
-        self.geometry("760x780")
-        self.resizable(False, False)
+        self.geometry("820x700")
+        self.minsize(700, 520)
         self.configure(fg_color=C["bg"])
         self._file_path = None
         self._columns = []
@@ -102,42 +102,73 @@ class ExcelCuidSeparatorApp(ctk.CTk):
         self._build()
 
     def _build(self):
+        # Layout: header (top) · footer with run button (always visible) · middle fills rest
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)
         hdr.pack(fill="x")
         inner = ctk.CTkFrame(hdr, fg_color="transparent")
-        inner.pack(padx=28, pady=16)
+        inner.pack(padx=28, pady=12)
 
-        icon_f = ctk.CTkFrame(inner, width=48, height=48, fg_color=TINT["mid"], corner_radius=12)
+        icon_f = ctk.CTkFrame(inner, width=44, height=44, fg_color=TINT["mid"], corner_radius=12)
         icon_f.pack(side="left", padx=(0, 14))
         icon_f.pack_propagate(False)
-        ctk.CTkLabel(icon_f, text="↔️", font=ctk.CTkFont("Segoe UI Emoji", 22)).place(
+        ctk.CTkLabel(icon_f, text="↔️", font=ctk.CTkFont("Segoe UI Emoji", 20)).place(
             relx=0.5, rely=0.5, anchor="center")
 
         txt = ctk.CTkFrame(inner, fg_color="transparent")
         txt.pack(side="left")
         ctk.CTkLabel(txt, text="Excel CUID Separator",
-                     font=ctk.CTkFont("Segoe UI", 18, "bold"),
+                     font=ctk.CTkFont("Segoe UI", 17, "bold"),
                      text_color=C["text"]).pack(anchor="w")
         ctk.CTkLabel(txt, text="Flatten multiple rows per CUID into wide columns with sums",
                      font=ctk.CTkFont("Segoe UI", 11),
                      text_color=C["muted"]).pack(anchor="w")
 
-        body = ctk.CTkScrollableFrame(self, fg_color="transparent",
-                                      scrollbar_button_color=C["border"])
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        # Footer packed first (side=bottom) so the run button never disappears
+        footer = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=0,
+                              border_width=1, border_color=C["border"])
+        footer.pack(side="bottom", fill="x")
+        foot_inner = ctk.CTkFrame(footer, fg_color="transparent")
+        foot_inner.pack(fill="x", padx=20, pady=12)
+
+        self._prog = ctk.CTkProgressBar(foot_inner, height=6, fg_color=C["hover"],
+                                        progress_color=C["accent"])
+        self._prog.pack(fill="x", pady=(0, 6))
+        self._prog.set(0)
+
+        self._stat = ctk.CTkLabel(foot_inner, text="Ready.",
+                                  font=ctk.CTkFont("Segoe UI", 11),
+                                  text_color=C["muted"], anchor="w")
+        self._stat.pack(fill="x", pady=(0, 8))
+
+        self._run_btn = ctk.CTkButton(
+            foot_inner, text="▶  Separate & Save",
+            font=ctk.CTkFont("Segoe UI", 14, "bold"),
+            fg_color=TINT["mid"], hover_color=TINT["bdr"],
+            text_color=C["accent"],
+            border_color=C["accent"], border_width=1,
+            corner_radius=24, height=44,
+            command=self._start)
+        self._run_btn.pack(fill="x")
+
+        # Middle content — fills remaining space; column lists scroll inside it
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=(10, 8))
 
         banner = ctk.CTkFrame(body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
-        banner.pack(fill="x", pady=(0, 14))
+        banner.pack(fill="x", pady=(0, 8))
         ctk.CTkLabel(
             banner,
             text="📁  Output → Desktop\\OUTPUT\\Excel_CUID_Separator\\<timestamp>\\",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["accent"]
-        ).pack(anchor="w", padx=14, pady=8)
+        ).pack(anchor="w", padx=14, pady=7)
 
-        self._section(body, "Step 1 — Select Excel File")
-        fr = ctk.CTkFrame(body, fg_color="transparent")
-        fr.pack(fill="x", pady=(0, 10))
+        top = ctk.CTkFrame(body, fg_color="transparent")
+        top.pack(fill="x", pady=(0, 6))
+
+        self._section(top, "Step 1 — Select Excel File")
+        fr = ctk.CTkFrame(top, fg_color="transparent")
+        fr.pack(fill="x", pady=(0, 6))
         self._file_lbl = ctk.CTkLabel(
             fr, text="No file selected",
             font=ctk.CTkFont("Segoe UI", 12),
@@ -150,73 +181,73 @@ class ExcelCuidSeparatorApp(ctk.CTk):
             text_color=C["text"], command=self._pick
         ).pack(side="right")
 
-        self._section(body, "Step 2 — Group-by Column")
-        gb = ctk.CTkFrame(body, fg_color="transparent")
-        gb.pack(fill="x", pady=(0, 10))
+        self._section(top, "Step 2 — Group-by Column")
+        gb = ctk.CTkFrame(top, fg_color="transparent")
+        gb.pack(fill="x", pady=(0, 4))
         ctk.CTkLabel(gb, text="Column:",
                      font=ctk.CTkFont("Segoe UI", 11),
                      text_color=C["muted"]).pack(side="left", padx=(0, 12))
-        self._groupby_e = ctk.CTkEntry(
-            gb, font=ctk.CTkFont("Segoe UI", 12),
+        self._groupby_cb = ctk.CTkComboBox(
+            gb, values=["cuid"], width=260, height=34,
+            font=ctk.CTkFont("Segoe UI", 12),
             fg_color=C["card"], border_color=C["border"],
-            text_color=C["text"], height=34, width=200)
-        self._groupby_e.pack(side="left")
-        self._groupby_e.insert(0, "cuid")
+            button_color=TINT["mid"], button_hover_color=TINT["bdr"],
+            dropdown_fg_color=C["card"], dropdown_hover_color=C["hover"],
+            dropdown_text_color=C["text"], text_color=C["text"])
+        self._groupby_cb.set("cuid")
+        self._groupby_cb.pack(side="left")
 
-        self._section(body, "Step 3 — Date Columns (format as DD-MM-YYYY)")
+        self._section(body, "Step 3 — Select columns")
+        cols_row = ctk.CTkFrame(body, fg_color="transparent")
+        cols_row.pack(fill="both", expand=True, pady=(0, 6))
+        cols_row.columnconfigure(0, weight=1)
+        cols_row.columnconfigure(1, weight=1)
+        cols_row.rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(cols_row, text="Date columns  (DD-MM-YYYY)",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=C["muted"], anchor="w"
+                     ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 4))
+        ctk.CTkLabel(cols_row, text="Sum columns  (total per group)",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=C["muted"], anchor="w"
+                     ).grid(row=0, column=1, sticky="w", padx=(8, 0), pady=(0, 4))
+
         self._date_frame = ctk.CTkScrollableFrame(
-            body, height=120, fg_color=C["card"],
+            cols_row, fg_color=C["card"],
             border_width=1, border_color=C["border"],
-            scrollbar_button_color=C["border"])
-        self._date_frame.pack(fill="x", pady=(0, 10))
+            scrollbar_button_color=C["border"],
+            scrollbar_button_hover_color=C["accent"])
+        self._date_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+
+        self._sum_frame = ctk.CTkScrollableFrame(
+            cols_row, fg_color=C["card"],
+            border_width=1, border_color=C["border"],
+            scrollbar_button_color=C["border"],
+            scrollbar_button_hover_color=C["accent"])
+        self._sum_frame.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
+
         self._date_hint = ctk.CTkLabel(
             self._date_frame, text="Load a file to see columns",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"])
         self._date_hint.pack(anchor="w", padx=12, pady=10)
-
-        self._section(body, "Step 4 — Sum Columns (totalled per group)")
-        self._sum_frame = ctk.CTkScrollableFrame(
-            body, height=120, fg_color=C["card"],
-            border_width=1, border_color=C["border"],
-            scrollbar_button_color=C["border"])
-        self._sum_frame.pack(fill="x", pady=(0, 10))
         self._sum_hint = ctk.CTkLabel(
             self._sum_frame, text="Load a file to see columns",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"])
         self._sum_hint.pack(anchor="w", padx=12, pady=10)
 
-        self._section(body, "Progress")
-        self._prog = ctk.CTkProgressBar(body, height=8, fg_color=C["card"],
-                                        progress_color=C["accent"])
-        self._prog.pack(fill="x", pady=(4, 8))
-        self._prog.set(0)
-
-        self._stat = ctk.CTkLabel(body, text="Ready.",
-                                  font=ctk.CTkFont("Segoe UI", 11),
-                                  text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 8))
-
-        self._log = ctk.CTkTextbox(body, height=140,
+        self._section(body, "Log")
+        self._log = ctk.CTkTextbox(body, height=80,
                                    font=ctk.CTkFont("Courier New", 11),
                                    fg_color=C["card"],
                                    border_color=C["border"], border_width=1,
                                    text_color=C["muted"], state="disabled")
-        self._log.pack(fill="x", pady=(0, 16))
-
-        self._run_btn = ctk.CTkButton(
-            body, text="▶  Separate & Save",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"],
-            border_color=C["accent"], border_width=1,
-            corner_radius=24, height=48,
-            command=self._start)
-        self._run_btn.pack(fill="x", pady=(0, 20))
+        self._log.pack(fill="x")
 
     def _section(self, parent, text):
         ctk.CTkLabel(parent, text=text,
                      font=ctk.CTkFont("Segoe UI", 12, "bold"),
-                     text_color=C["text"], anchor="w").pack(fill="x", pady=(14, 2))
+                     text_color=C["text"], anchor="w").pack(fill="x", pady=(6, 2))
 
     def _write_log(self, msg):
         self._log.configure(state="normal")
@@ -224,20 +255,15 @@ class ExcelCuidSeparatorApp(ctk.CTk):
         self._log.see("end")
         self._log.configure(state="disabled")
 
-    def _clear_checks(self, frame, vars_dict, hint_attr):
-        for w in frame.winfo_children():
-            w.destroy()
-        vars_dict.clear()
-        if not self._columns:
-            lbl = ctk.CTkLabel(frame, text="Load a file to see columns",
-                               font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"])
-            lbl.pack(anchor="w", padx=12, pady=10)
-            setattr(self, hint_attr, lbl)
-
     def _fill_checks(self, frame, vars_dict):
         for w in frame.winfo_children():
             w.destroy()
         vars_dict.clear()
+        if not self._columns:
+            ctk.CTkLabel(frame, text="Load a file to see columns",
+                         font=ctk.CTkFont("Segoe UI", 11),
+                         text_color=C["faint"]).pack(anchor="w", padx=12, pady=10)
+            return
         for col in self._columns:
             var = ctk.BooleanVar(value=False)
             vars_dict[col] = var
@@ -265,11 +291,9 @@ class ExcelCuidSeparatorApp(ctk.CTk):
             self._fill_checks(self._date_frame, self._date_vars)
             self._fill_checks(self._sum_frame, self._sum_vars)
 
-            # Prefer cuid if present
+            self._groupby_cb.configure(values=self._columns)
             lower_map = {c.lower(): c for c in self._columns}
-            if "cuid" in lower_map:
-                self._groupby_e.delete(0, "end")
-                self._groupby_e.insert(0, lower_map["cuid"])
+            self._groupby_cb.set(lower_map.get("cuid", self._columns[0]))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load the file:\n{e}")
 
@@ -280,9 +304,9 @@ class ExcelCuidSeparatorApp(ctk.CTk):
         if not self._file_path:
             messagebox.showwarning("No File", "Please select an Excel file first.")
             return
-        groupby = self._groupby_e.get().strip()
+        groupby = self._groupby_cb.get().strip()
         if not groupby:
-            messagebox.showwarning("No Column", "Please enter a group-by column (e.g. cuid).")
+            messagebox.showwarning("No Column", "Please select a group-by column.")
             return
 
         self._run_btn.configure(state="disabled", text="Processing…")
