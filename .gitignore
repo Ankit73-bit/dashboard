@@ -14,3 +14,4 @@ u2net.onnx
 models/
 # rembg cache
 ~/.u2net
+poppler-25.07.0

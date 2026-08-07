@@ -7,6 +7,7 @@ from ui.panels.home_panel       import HomePanel
 from ui.panels.docs_panel       import DocsPanel
 from ui.panels.group_sub_panel  import GroupSubPanel
 from ui.panels.paras_print_panel import ParasPrintPanel, PARAS_PRINT_SERVICES
+from ui.panels.scan_panel       import ScanPanel, SCAN_SERVICES
 
 
 class Dashboard(ctk.CTk):
@@ -40,6 +41,7 @@ class Dashboard(ctk.CTk):
         nav_items = [
             ("🏠", "Home",        self._show_home),
             ("🖨️", "Paras Print", self._show_paras_print),
+            ("📡", "Scan",        self._show_scan),
             ("📖", "Docs",        self._show_docs),
             ("⚙️", "Settings",    None),
             ("❓", "Help",         None),
@@ -72,6 +74,7 @@ class Dashboard(ctk.CTk):
             [tool for grp in GROUPS for tool in grp["tools"]]
             + SERVICES
             + PARAS_PRINT_SERVICES
+            + SCAN_SERVICES
         )
 
         # Pre-build all panels
@@ -82,13 +85,14 @@ class Dashboard(ctk.CTk):
         )
         self.docs_panel        = DocsPanel(self.main, all_services_for_docs)
         self.paras_print_panel = ParasPrintPanel(self.main, open_docs_cb=self._open_docs_for)
+        self.scan_panel        = ScanPanel(self.main, open_docs_cb=self._open_docs_for)
         self.sub_panel         = None   # created on demand per group
 
         self._show_home()
 
     # ── Nav helpers ───────────────────────────────────────────────────────────
     def _all_panels(self):
-        panels = [self.home_panel, self.docs_panel, self.paras_print_panel]
+        panels = [self.home_panel, self.docs_panel, self.paras_print_panel, self.scan_panel]
         if self.sub_panel:
             panels.append(self.sub_panel)
         return panels
@@ -127,6 +131,11 @@ class Dashboard(ctk.CTk):
         self._hide_all()
         self.paras_print_panel.pack(fill="both", expand=True)
         self._set_active_nav("Paras Print")
+
+    def _show_scan(self):
+        self._hide_all()
+        self.scan_panel.pack(fill="both", expand=True)
+        self._set_active_nav("Scan")
 
     def _open_group(self, grp):
         if self.sub_panel:

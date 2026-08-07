@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from tkinter import messagebox
@@ -203,6 +204,11 @@ class ServiceCard(ctk.CTkFrame):
             )
             return
         try:
-            subprocess.Popen([sys.executable, script])
+            # Launch from the script's folder so sibling imports resolve
+            script_dir = os.path.dirname(os.path.abspath(script))
+            subprocess.Popen(
+                [sys.executable, script],
+                cwd=script_dir,
+            )
         except Exception as e:
             messagebox.showerror("Error", f"Could not launch:\n{e}")
