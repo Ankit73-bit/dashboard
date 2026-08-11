@@ -38,24 +38,23 @@ SCAN_SERVICES = [
     },
     {
         "title":       "2 · Barcode Excel Matcher",
-        "description": "Exact + fuzzy match renamed barcode PDFs against Excel tracking lists; update remarks.",
+        "description": "Exact-match renamed barcode PDFs against Excel tracking lists; update remarks.",
         "icon":        "🔗",
         "accent":      C["green"],
         "tag":         "Step 2 · Match",
         "script":      os.path.join(SCAN_SCRIPTS, "barcode_excel_matcher.py"),
         "sample":      None,
         "docs": {
-            "what": "Loads barcodes from Excel files (barcode / AWB / tracking columns), then matches each renamed PDF filename. Exact matches stay; near-misses (OCR typos) are fuzzy-renamed to the Excel barcode; unmatched PDFs move to not_found. Excel rows get a remark column (Exact Match / Fuzzy Match).",
+            "what": "Loads barcodes from Excel files (barcode / AWB / tracking columns), then matches each renamed PDF filename. Exact matches stay; unmatched PDFs move to not_found. Excel rows get a remark column (Exact Match).",
             "when": "Use after Barcode Split & Rename, when you have renamed_pdfs and Excel lists of expected barcodes.",
             "steps": [
                 ("Select renamed PDFs folder", "Usually the renamed_pdfs output from Step 1."),
                 ("Select Excel folder", "Folder of .xlsx/.xls files containing barcode / tracking columns."),
-                ("Click Run", "PDFs are matched, fuzzy-renamed if needed, and Excel remarks updated."),
+                ("Click Run", "PDFs are exact-matched and Excel remarks updated."),
             ],
             "tips": [
-                "Install rapidfuzz for much faster fuzzy matching: pip install rapidfuzz",
+                "Only exact barcode matches are kept; near-misses are treated as not found.",
                 "India Post format (e.g. EK123456789IN) is validated when loading Excel.",
-                "Duplicate rename conflicts are moved to duplicate_match_conflicts.",
             ],
             "output": "Desktop\\OUTPUT\\Scan_Barcode_Matcher\\<timestamp>\\",
         },

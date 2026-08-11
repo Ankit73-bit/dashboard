@@ -1,6 +1,6 @@
 """
 Tool: Barcode Excel Matcher (Scan Step 2)
-Exact + fuzzy match renamed barcode PDFs to Excel lists.
+Exact-match renamed barcode PDFs to Excel lists (no fuzzy).
 """
 
 import os
@@ -93,7 +93,7 @@ def run_match(pdf_folder, excel_folder, out_dir, log_fn, progress_fn):
         progress_fn(0.4)
         (
             exact_count,
-            fuzzy_count,
+            _fuzzy_count,
             moved_count,
             duplicate_conflict_count,
             found_barcodes,
@@ -114,7 +114,6 @@ def run_match(pdf_folder, excel_folder, out_dir, log_fn, progress_fn):
 
         return {
             "exact": exact_count,
-            "fuzzy": fuzzy_count,
             "moved": moved_count,
             "conflicts": duplicate_conflict_count,
             "errors": len(errors),
@@ -142,7 +141,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(inn, text="🔗  Barcode Excel Matcher",
                      font=ctk.CTkFont("Segoe UI", 18, "bold"),
                      text_color=C["text"]).pack(anchor="w")
-        ctk.CTkLabel(inn, text="Scan Step 2 — exact + fuzzy match PDFs to Excel barcodes",
+        ctk.CTkLabel(inn, text="Scan Step 2 — exact match PDFs to Excel barcodes",
                      font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"]).pack(anchor="w")
 
         body = ctk.CTkScrollableFrame(self, fg_color="transparent",
@@ -258,18 +257,17 @@ class App(ctk.CTk):
             stats = run_match(self._pdf_folder, self._excel_folder, out_dir, log, prog)
             log("\n========== SUMMARY ==========")
             log(f"Exact matches : {stats['exact']}")
-            log(f"Fuzzy matches : {stats['fuzzy']}")
             log(f"Not found     : {stats['moved']}")
             log(f"Conflicts     : {stats['conflicts']}")
             log(f"Errors        : {stats['errors']}")
             log(f"Log           : {stats['log']}")
             self.after(0, lambda: self._stat.configure(
-                text=f"Done — exact {stats['exact']}, fuzzy {stats['fuzzy']}, missing {stats['moved']}.",
+                text=f"Done — exact {stats['exact']}, missing {stats['moved']}.",
                 text_color=C["green"]))
             self.after(0, lambda: subprocess.Popen(["explorer", out_dir]))
             self.after(0, lambda: messagebox.showinfo(
                 "Complete",
-                f"Exact: {stats['exact']}\nFuzzy: {stats['fuzzy']}\n"
+                f"Exact: {stats['exact']}\n"
                 f"Not found: {stats['moved']}\nConflicts: {stats['conflicts']}\n\n"
                 f"Next: Matched PDF Merger.\n\n{out_dir}"
             ))
