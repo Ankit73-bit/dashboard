@@ -172,11 +172,11 @@ GROUPS = [
     },
     {
         "title":       "PDF Tools",
-        "description": "Watermark, generate, split/zip, and match tracking PDFs.",
+        "description": "Watermark, generate, split/rename, split/zip, and match tracking PDFs.",
         "icon":        "📄",
         "accent":      C["purple"],
         "tag":         "PDF",
-        "count":       "4 tools",
+        "count":       "5 tools",
         "tools": [
                 {
                     "title":       "PDF Watermark",
@@ -242,6 +242,32 @@ GROUPS = [
                             "AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET_NAME) should be in a .env file in the scripts folder.",
                         ],
                         "output": "Desktop\\OUTPUT\\PDF_Generator\\YYYY-MM-DD_HH-MM-SS\\OUTPUT\\  |  …\\MERGE_PDF\\",
+                    },
+                },
+                {
+                    "title":       "PDF Split & Rename by SL",
+                    "sample":      None,
+                    "description": "Split multi-page PDFs into page groups and rename each file from the SL number on the first page.",
+                    "icon":        "✂️",
+                    "accent":      C["purple"],
+                    "tag":         "PDF · Split",
+                    "script":      os.path.join(SCRIPTS, "split_and_rename.py"),
+                    "docs": {
+                        "what": "Takes one or more multi-page PDFs, splits them into fixed page groups (default 2 pages), reads text from the first page of each group, and renames the output to the matched ID (default pattern: SL numbers like SL1186435). Groups with no match are saved as Unknown_N.pdf. A CSV log records every split.",
+                        "when": "Use this when you have a merged loan/notice PDF and need individual files named by SL / loan number printed on the page.",
+                        "steps": [
+                            ("Open the tool", "Click 'Launch →' on the PDF Split & Rename by SL card under PDF Tools."),
+                            ("Select PDF(s)", "Use 'File…' for one or more PDFs, or 'Folder…' to process every PDF in a folder."),
+                            ("Set pages per file", "Default is 2. Change if each document uses a different page count."),
+                            ("Confirm ID pattern", "Default regex is \\bSL\\d+\\b. Change only if your documents use a different ID format."),
+                            ("Click 'Split & Rename'", "Each group is written to split_pdfs and logged in split_rename_log.csv."),
+                        ],
+                        "tips": [
+                            "Works on text-based PDFs (extract_text). Scanned image-only PDFs will usually fall into Unknown_*.pdf.",
+                            "Duplicate SL numbers get a numeric suffix (_1, _2) so nothing is overwritten.",
+                            "Different from PDF Split & Zip — that tool batches whole files into ZIPs; this one splits pages and renames by ID.",
+                        ],
+                        "output": "Desktop\\OUTPUT\\Split_And_Rename\\YYYY-MM-DD_HH-MM-SS\\",
                     },
                 },
                 {
