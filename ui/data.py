@@ -172,11 +172,11 @@ GROUPS = [
     },
     {
         "title":       "PDF Tools",
-        "description": "Watermark, generate, split/rename, split/zip, and match tracking PDFs.",
+        "description": "Watermark, generate, split/rename, remove pages, split/zip, and match tracking PDFs.",
         "icon":        "📄",
         "accent":      C["purple"],
         "tag":         "PDF",
-        "count":       "5 tools",
+        "count":       "6 tools",
         "tools": [
                 {
                     "title":       "PDF Watermark",
@@ -296,6 +296,32 @@ GROUPS = [
                             "Uncheck the delete option if you want to keep both the batch folders and the ZIP files for inspection.",
                         ],
                         "output": "Desktop\\OUTPUT\\Split_And_Merge\\YYYY-MM-DD_HH-MM-SS\\",
+                    },
+                },
+                {
+                    "title":       "PDF Page Remover",
+                    "sample":      None,
+                    "description": "Remove specific pages or ranges from a PDF (e.g. 3-4, 11-14, 16) and save a cleaned copy.",
+                    "icon":        "🗑️",
+                    "accent":      C["pink"],
+                    "tag":         "PDF · Edit",
+                    "script":      os.path.join(SCRIPTS, "pdf_page_remover.py"),
+                    "docs": {
+                        "what": "Opens a PDF, removes the page numbers and ranges you enter (1-based), and writes a new PDF with those pages gone. Original file is never modified.",
+                        "when": "Use when a multi-page PDF has wrong, blank, or unwanted pages you need stripped out before splitting, printing, or dispatch.",
+                        "steps": [
+                            ("Open the tool", "Click 'Launch →' on the PDF Page Remover card under PDF Tools."),
+                            ("Select PDF", "Browse to the PDF. The total page count is shown after selection."),
+                            ("Enter pages to remove", "Type pages and ranges separated by commas, e.g. 3-4, 11-14, 16."),
+                            ("Click 'Remove Pages'", "A cleaned PDF is saved and the output folder opens."),
+                        ],
+                        "tips": [
+                            "Page 1 is the first page of the PDF.",
+                            "Ranges can be written either way (14-11 is treated the same as 11-14).",
+                            "You cannot remove every page — at least one page must remain.",
+                            "Output file is named <original>_pages_removed.pdf.",
+                        ],
+                        "output": "Desktop\\OUTPUT\\PDF_Page_Remover\\YYYY-MM-DD_HH-MM-SS\\",
                     },
                 },
                 {
