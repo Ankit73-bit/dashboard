@@ -325,11 +325,11 @@ GROUPS = [
     },
     {
         "title":       "Excel Tools",
-        "description": "Deduplicate, convert, transform, separate by CUID, and build sticker sheets.",
+        "description": "Deduplicate, convert, transform, separate by CUID, build sticker sheets, and format UCP PDFs.",
         "icon":        "📊",
         "accent":      C["orange"],
         "tag":         "Excel",
-        "count":       "5 tools",
+        "count":       "6 tools",
         "tools": [
                 {
                     "title":       "Sticker Tool",
@@ -472,6 +472,33 @@ GROUPS = [
                             "Each run creates a new timestamped folder so previous outputs are never overwritten.",
                         ],
                         "output": "Desktop\\OUTPUT\\Excel_CUID_Separator\\YYYY-MM-DD_HH-MM-SS\\",
+                    },
+                },
+                {
+                    "title":       "UCP Format PDF",
+                    "sample":      None,
+                    "description": "Group Excel by Prospect No, add a custom header, style sheets, export per-group PDFs, and merge.",
+                    "icon":        "📑",
+                    "accent":      C["orange"],
+                    "tag":         "Excel · PDF",
+                    "script":      os.path.join(SCRIPTS, "ucp_format_pdf.py"),
+                    "docs": {
+                        "what": "Reads an Excel file, groups rows by Prospect No (or any column you choose), writes a styled Excel per group with a custom header, exports each to PDF via Excel, then merges into UCP_format.pdf in batches.",
+                        "when": "Use this when you need one formatted landscape PDF table per prospect (UCP-style) and a single merged PDF for printing or dispatch.",
+                        "steps": [
+                            ("Open the tool", "Click 'Launch →' on the UCP Format PDF card under Excel Tools."),
+                            ("Select Excel file", "Browse to your UCP / dispatch Excel. Columns are detected automatically."),
+                            ("Set group column", "Default is Prospect_No — change if your ID column has another name."),
+                            ("Edit header text", "Default is 'ACRE | Prospect No - {prospect_no}'. Change the prefix; keep {prospect_no} where the ID should appear."),
+                            ("Set wide column", "Column that gets width 70 (default Address). Use e.g. Ref No if that column needs more space."),
+                            ("Click Generate", "Per-group Excels/PDFs are created, then merged. Requires Excel + pywin32 on Windows."),
+                        ],
+                        "tips": [
+                            "Requires Microsoft Excel installed (used for PDF export via COM).",
+                            "Dispatch Date columns are formatted as DD-MM-YYYY when present.",
+                            "Output includes output_excels, output_pdfs, output_batches, and UCP_format.pdf.",
+                        ],
+                        "output": "Desktop\\OUTPUT\\UCP_Format_PDF\\YYYY-MM-DD_HH-MM-SS\\",
                     },
                 },
         ],
