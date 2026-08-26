@@ -81,13 +81,71 @@ def resolve_header(template: str, prospect_no) -> str:
     return out
 
 
-def format_dispatch_dates(df: pd.DataFrame) -> pd.DataFrame:
-    date_col = find_column(df.columns, ["Dispatch Date", "dispatch_date", "DispatchDate"])
-    if date_col:
-        df = df.copy()
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%d-%m-%Y")
-        df[date_col] = df[date_col].fillna("")
-    return df
+def _parse_one_date(val):
+    """Parse a single date value; prefer DD-MM-YYYY for ambiguous strings."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return pd.NaT
+    if isinstance(val, pd.Timestamp):
+        return val
+    if isinstance(val, datetime):
+        return pd.Timestamp(val)
+    # Excel serial number
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            return pd.to_datetime(val, unit="D", origin="1899-12-30", errors="coerce")
+        except Exception:
+            pass
+
+    s = str(val).strip()
+    if not s or s.lower() in ("nan", "nat", "none"):
+        return pd.NaT
+
+    # ISO / yyyy-mm-dd
+    if re.match(r"^\d{4}-\d{1,2}-\d{1,2}", s):
+        return pd.to_datetime(s[:10], format="%Y-%m-%d", errors="coerce")
+
+    # Explicit DD-MM-YYYY / DD/MM/YYYY (and 2-digit year)
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%d-%m-%y", "%d/%m/%y", "%d.%m.%Y"):
+        try:
+            return pd.Timestamp(datetime.strptime(s[:10], fmt))
+        except ValueError:
+            continue
+
+    # Last resort: day-first
+    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+
+
+def _parse_date_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return pd.to_datetime(series, errors="coerce")
+    return series.map(_parse_one_date)
+
+
+def format_date_columns(df: pd.DataFrame) -> tuple:
+    """
+    Format date-like columns as DD-MM-YYYY text.
+    Ambiguous strings (08-03-2026) are treated as day-month-year.
+    Stored as strings so Excel does not re-display them as MM-DD-YYYY.
+    """
+    df = df.copy()
+    date_cols = []
+    for col in df.columns:
+        cl = str(col).strip().lower().replace("_", " ")
+        if "date" in cl:
+            date_cols.append(col)
+
+    for col in date_cols:
+        series = df[col]
+        parsed = _parse_date_series(series)
+        out = []
+        for raw, ts in zip(series, parsed):
+            if pd.isna(ts):
+                out.append("" if pd.isna(raw) else str(raw).strip())
+            else:
+                out.append(pd.Timestamp(ts).strftime("%d-%m-%Y"))
+        df[col] = out
+
+    return df, date_cols
 
 
 def drop_empty_columns(df: pd.DataFrame, keep=()) -> tuple:
@@ -115,8 +173,9 @@ def drop_empty_columns(df: pd.DataFrame, keep=()) -> tuple:
     return df[keep_cols].copy(), dropped
 
 
-def write_group_excel(group_df, excel_path, header_text, wide_col_name):
+def write_group_excel(group_df, excel_path, header_text, wide_col_name, date_cols=None):
     """Write one styled Excel file for a prospect group."""
+    date_cols = set(date_cols or [])
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
         group_df.to_excel(writer, index=False, sheet_name="Sheet1")
         ws = writer.book.active
@@ -138,19 +197,32 @@ def write_group_excel(group_df, excel_path, header_text, wide_col_name):
                 )
                 cell.border = border
 
-        # Header row (row 2) names → find wide column index
+        # Header row (row 2) names → find wide / date column indices
         wide_col_idx = None
-        if wide_col_name:
+        date_col_idxs = set()
+        if wide_col_name or date_cols:
             for cell in ws[2]:
-                if cell.value is not None and str(cell.value).strip().lower() == wide_col_name.strip().lower():
+                if cell.value is None:
+                    continue
+                name = str(cell.value).strip()
+                name_l = name.lower()
+                if wide_col_name and name_l == wide_col_name.strip().lower():
                     wide_col_idx = cell.column
-                    break
-            if wide_col_idx is None:
-                # partial match
-                for cell in ws[2]:
-                    if cell.value and wide_col_name.strip().lower() in str(cell.value).strip().lower():
-                        wide_col_idx = cell.column
-                        break
+                elif wide_col_name and wide_col_name.strip().lower() in name_l and wide_col_idx is None:
+                    wide_col_idx = cell.column
+                if name in date_cols or any(
+                    str(dc).strip().lower() == name_l for dc in date_cols
+                ):
+                    date_col_idxs.add(cell.column)
+
+        # Force date columns to text so Excel won't reformat as MM-DD-YYYY
+        for col_idx in date_col_idxs:
+            for row_i in range(3, ws.max_row + 1):
+                cell = ws.cell(row=row_i, column=col_idx)
+                if cell.value is None or cell.value == "":
+                    continue
+                cell.number_format = "@"
+                cell.value = str(cell.value)
 
         for i in range(1, ws.max_column + 1):
             col_letter = get_column_letter(i)
@@ -233,7 +305,10 @@ def run_pipeline(
         else:
             log_fn(f"⚠ Wide column '{wide_col}' not found — using auto widths only")
 
-    data = format_dispatch_dates(data)
+    data, date_cols = format_date_columns(data)
+    if date_cols:
+        log_fn(f"Date columns (DD-MM-YYYY) → {', '.join(date_cols)}")
+
     groups = list(data.groupby(group_col, sort=False))
     total = len(groups)
     if total == 0:
@@ -269,11 +344,15 @@ def run_pipeline(
             # Drop columns empty for this prospect only (keep group col)
             g, dropped_group = drop_empty_columns(g, keep=(group_col,))
             wide_for_group = wide_resolved if wide_resolved in g.columns else None
+            date_cols_group = [c for c in date_cols if c in g.columns]
             g.insert(0, "SrNo", range(1, len(g) + 1))
             header_text = resolve_header(header_template, prospect_no)
 
             try:
-                write_group_excel(g, excel_path, header_text, wide_for_group)
+                write_group_excel(
+                    g, excel_path, header_text, wide_for_group,
+                    date_cols=date_cols_group,
+                )
                 excel_to_pdf(excel, excel_path, pdf_path)
                 created += 1
                 extra = f", dropped {len(dropped_group)} empty cols" if dropped_group else ""
