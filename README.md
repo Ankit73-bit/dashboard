@@ -6,13 +6,16 @@ When new tools are added, they appear on your device without any action from you
 
 ---
 
-## First time on a new device — 3 steps
+## First time on a new device
 
 ### Step 1 — Install Python (once ever)
-Download and install Python from:
+Download **Python 3.11 or 3.12** from:
 **https://www.python.org/downloads/**
 
-> ⚠️ During installation, tick **"Add Python to PATH"**
+> During installation, tick **"Add python.exe to PATH"**
+
+Recommended: **3.12** (best package support on Windows).
+Avoid Python 3.14+ if install fails — some libraries may not have Windows wheels yet.
 
 ---
 
@@ -20,56 +23,68 @@ Download and install Python from:
 Download from: **https://drive.google.com/drive/download**
 
 Sign in with the Google account this folder was shared with.
-The DASHBOARD folder will appear on your computer automatically — no manual downloading.
+The DASHBOARD folder will appear on your computer automatically.
 
 ---
 
 ### Step 3 — Run setup (once per device)
 Inside the DASHBOARD folder, double-click **`setup.bat`**
 
-This installs all required libraries. Takes about a minute.
-You only ever need to do this once per device.
+This installs all required libraries. Takes a few minutes.
+You only need to do this once per device (or again if new libraries are added).
 
 ---
 
 ### Step 4 — Create a Desktop shortcut (once per device)
-Inside the DASHBOARD folder, double-click **`create_shortcut.bat`**
+Double-click **`create_shortcut.bat`**
 
 This places a **Dashboard** shortcut on your Desktop.
-You never need to open Google Drive again.
 
 ---
 
 ## Opening the dashboard (every day)
-Double-click the **Dashboard** shortcut on your Desktop.
-
-That's it. The dashboard always opens the latest version automatically.
+Double-click the **Dashboard** shortcut on your Desktop, or **`run.bat`**.
 
 ---
 
 ## Getting updates
-Nothing to do. When new tools or changes are made, Google Drive syncs them
-to your device in the background. Just open `run.bat` as usual.
+Google Drive syncs changes automatically. Open `run.bat` as usual.
 
-The only exception: if a new tool uses a new library, you'll see a message
-asking you to run `setup.bat` once more. This will be rare.
+If a new tool needs a new library, run **`setup.bat`** once more.
 
 ---
 
 ## Folder structure
 ```
 DASHBOARD/
-├── dashboard.py        ← Main app (do not move or rename)
-├── run.bat             ← Open the dashboard — double-click this daily
-├── setup.bat           ← First-time setup — run once per device
-├── requirements.txt    ← Library list (do not edit)
-├── scripts/            ← All tool scripts (auto-synced)
-└── samples/            ← Sample files for each tool (auto-synced)
+├── dashboard.py                 ← Main app
+├── run.bat                      ← Open the dashboard
+├── setup.bat                    ← First-time setup
+├── create_shortcut.bat          ← Desktop shortcut
+├── requirements.txt             ← Core libraries
+├── requirements-optional.txt    ← Optional AI packages (rembg)
+├── scripts/                     ← Tool scripts
+├── scan_letter/                 ← Scan workflow tools
+├── paras_print_scripts/         ← Paras Print tools
+└── samples/                     ← Sample files
 ```
 
 ---
 
 ## Trouble?
-- **"Python not found"** → Re-install Python and tick "Add Python to PATH"
-- **"Module not found"** → Run `setup.bat` again
-- **Folder not syncing** → Check Google Drive for Desktop is running (look for the Drive icon in your taskbar)
+
+| Error | Fix |
+|--------|-----|
+| **Python not found** | Install Python 3.11/3.12 from python.org and tick **Add to PATH**, then close and reopen the setup window |
+| **Module not found** | Run `setup.bat` again |
+| **pip / t64.exe / distlib error** | Already fixed in latest `setup.bat` (it no longer upgrades pip). Sync the folder and re-run `setup.bat` |
+| **pip / wheel build failed** | Use Python **3.12** (not 3.14). Re-run `setup.bat` |
+| **create_shortcut Desktop not found** | OneDrive Desktop redirect — use latest `create_shortcut.bat`, or open via `run.bat` |
+| **pywin32 / Excel print errors** | Re-run `setup.bat` (it configures pywin32) |
+| **Tesseract / OCR errors** (Scan tools) | Install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) to `C:\Program Files\Tesseract-OCR` |
+| **pyzbar DLL error** | Install [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) |
+| **Folder not syncing** | Check Google Drive for Desktop is running |
+
+### Extra notes
+- Path can include spaces (e.g. `MAIN CODE`) — setup/run scripts handle this.
+- Optional AI packages (`rembg`) may fail on some PCs; the dashboard still works without them (BG Changer / BW Converter only).
