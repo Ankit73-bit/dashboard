@@ -6,6 +6,7 @@ styled Excel sheet with a custom header, export to PDF, then merge.
 
 import os
 import re
+import json
 import threading
 import subprocess
 from datetime import datetime
@@ -37,6 +38,7 @@ DEFAULT_BATCH = 500
 DEFAULT_SHEETS_PER_BOOK = 50  # groups packed into one Excel open/export (big speedup)
 WIDE_WIDTH = 70
 LOG_EVERY = 1  # log every N batches (each batch = sheets_per_book groups)
+CHUNK_META_NAME = "chunk_split_meta.json"
 
 
 class CancelledError(Exception):
@@ -125,6 +127,344 @@ def unique_pdf_path(folder, base_name, used: set) -> str:
         n += 1
     used.add(name.lower())
     return os.path.join(folder, f"{name}.pdf")
+
+
+def save_chunk_meta(out_dir, chunk_meta, name_col=None, group_col=None):
+    """
+    Persist split metadata next to the run so 'Split chunks only' can reuse it.
+    chunk_meta: list of (pdf_path, filenames, page_counts)
+    """
+    payload = {
+        "version": 1,
+        "name_col": name_col,
+        "group_col": group_col,
+        "chunks": [
+            {
+                "file": os.path.basename(pdf_path),
+                "filenames": [str(x) for x in filenames],
+                "page_counts": [int(x) for x in (page_counts or [])],
+            }
+            for pdf_path, filenames, page_counts in chunk_meta
+        ],
+    }
+    meta_path = os.path.join(out_dir, CHUNK_META_NAME)
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return meta_path
+
+
+def load_chunk_meta(run_dir):
+    """
+    Load chunk_split_meta.json from a previous run folder.
+    Accepts the run root, or its output_pdfs subfolder.
+    Returns (meta_path, chunks_dir, list[(pdf_path, filenames, page_counts)]).
+    """
+    run_dir = os.path.abspath(run_dir)
+    candidates = [
+        os.path.join(run_dir, CHUNK_META_NAME),
+        os.path.join(os.path.dirname(run_dir), CHUNK_META_NAME),
+    ]
+    # Also allow selecting the output_pdfs folder
+    if os.path.basename(run_dir).lower() == "output_pdfs":
+        candidates.insert(0, os.path.join(os.path.dirname(run_dir), CHUNK_META_NAME))
+
+    meta_path = next((p for p in candidates if os.path.isfile(p)), None)
+    if not meta_path:
+        raise FileNotFoundError(
+            f"Could not find {CHUNK_META_NAME} near:\n{run_dir}\n\n"
+            "Pick the previous run folder (the timestamp folder), or re-run "
+            "From Excel once so metadata is saved."
+        )
+
+    root = os.path.dirname(meta_path)
+    with open(meta_path, encoding="utf-8") as f:
+        payload = json.load(f)
+
+    chunks_dir = os.path.join(root, "output_pdfs")
+    if not os.path.isdir(chunks_dir):
+        # meta next to loose PDFs
+        chunks_dir = root if any(
+            fn.lower().endswith(".pdf") for fn in os.listdir(root)
+        ) else chunks_dir
+
+    if not os.path.isdir(chunks_dir):
+        raise FileNotFoundError(f"Chunk PDF folder not found:\n{chunks_dir}")
+
+    chunk_meta = []
+    missing = []
+    for item in payload.get("chunks", []):
+        fname = item.get("file")
+        pdf_path = os.path.join(chunks_dir, fname) if fname else ""
+        if not pdf_path or not os.path.isfile(pdf_path):
+            missing.append(fname or "?")
+            continue
+        chunk_meta.append((
+            pdf_path,
+            list(item.get("filenames") or []),
+            list(item.get("page_counts") or []),
+        ))
+
+    if missing:
+        raise FileNotFoundError(
+            "Some chunk PDFs listed in metadata are missing:\n"
+            + "\n".join(f"  - {m}" for m in missing[:20])
+            + (f"\n  … and {len(missing) - 20} more" if len(missing) > 20 else "")
+        )
+    if not chunk_meta:
+        raise ValueError(f"No chunk entries found in {meta_path}")
+
+    return meta_path, chunks_dir, chunk_meta, root
+
+
+def merge_pdfs(pdf_list, out_dir, batch_size, log_fn, progress_fn, cancel_check, progress_start=0.90, progress_end=0.98):
+    """Merge PDFs into UCP_format.pdf using intermediate batches."""
+    def _raise_if_cancelled(stage=""):
+        if cancel_check and cancel_check():
+            msg = "Cancelled by user"
+            if stage:
+                msg = f"{msg} ({stage})"
+            raise CancelledError(msg)
+
+    if not pdf_list:
+        raise ValueError("No PDFs to merge.")
+
+    batch_dir = os.path.join(out_dir, "output_batches")
+    os.makedirs(batch_dir, exist_ok=True)
+
+    batch_files = []
+    merge_batch = max(1, min(int(batch_size or DEFAULT_BATCH), 500))
+    batch_total = max(1, (len(pdf_list) + merge_batch - 1) // merge_batch)
+    for i in range(0, len(pdf_list), merge_batch):
+        _raise_if_cancelled("during merge")
+        batch = pdf_list[i:i + merge_batch]
+        batch_output = os.path.join(batch_dir, f"batch_{i // merge_batch + 1}.pdf")
+        merger = PdfMerger()
+        for pdf in batch:
+            merger.append(pdf)
+        merger.write(batch_output)
+        merger.close()
+        batch_files.append(batch_output)
+        log_fn(f"  Batch → {os.path.basename(batch_output)} ({len(batch)} files)")
+        frac = (i // merge_batch + 1) / batch_total
+        progress_fn(progress_start + (progress_end - progress_start) * frac)
+
+    _raise_if_cancelled("before final PDF")
+    final_output = os.path.join(out_dir, "UCP_format.pdf")
+    if len(batch_files) == 1:
+        import shutil
+        shutil.copy2(batch_files[0], final_output)
+    else:
+        merger = PdfMerger()
+        for bf in batch_files:
+            merger.append(bf)
+        merger.write(final_output)
+        merger.close()
+    return final_output
+
+
+def split_all_chunks(chunk_meta, single_dir, log_fn, progress_fn, cancel_check, progress_start=0.70, progress_end=0.90):
+    """Split every chunk PDF in chunk_meta into singles. Returns (paths, errors)."""
+    def _raise_if_cancelled(stage=""):
+        if cancel_check and cancel_check():
+            msg = "Cancelled by user"
+            if stage:
+                msg = f"{msg} ({stage})"
+            raise CancelledError(msg)
+
+    os.makedirs(single_dir, exist_ok=True)
+    individual_pdfs = []
+    errors = []
+    used_names = set()
+    total = max(1, len(chunk_meta))
+    for i, (pdf_path, file_names, page_counts) in enumerate(chunk_meta, 1):
+        _raise_if_cancelled(f"during split after {len(individual_pdfs)} singles")
+        try:
+            singles = split_chunk_pdf(
+                pdf_path, file_names, page_counts, single_dir, used_names,
+            )
+            individual_pdfs.extend(singles)
+            if i % LOG_EVERY == 0 or i == len(chunk_meta):
+                log_fn(
+                    f"  Split [{i}/{len(chunk_meta)}] "
+                    f"{os.path.basename(pdf_path)} → {len(singles)} singles "
+                    f"(total {len(individual_pdfs)})"
+                )
+        except Exception as e:
+            errors.append((os.path.basename(pdf_path), f"split: {e}"))
+            log_fn(f"❌ Split {os.path.basename(pdf_path)} — {e}")
+        progress_fn(progress_start + (progress_end - progress_start) * (i / total))
+    return individual_pdfs, errors
+
+
+def list_chunk_pdfs(chunks_dir):
+    """Return sorted chunk_XXXX.pdf paths from a folder (or its output_pdfs)."""
+    chunks_dir = os.path.abspath(chunks_dir)
+    if os.path.isdir(os.path.join(chunks_dir, "output_pdfs")):
+        chunks_dir = os.path.join(chunks_dir, "output_pdfs")
+    if not os.path.isdir(chunks_dir):
+        raise FileNotFoundError(f"Chunk folder not found:\n{chunks_dir}")
+
+    files = []
+    for name in os.listdir(chunks_dir):
+        if not name.lower().endswith(".pdf"):
+            continue
+        # Prefer chunk_0001.pdf style; still accept any pdf sorted by name
+        files.append(name)
+    # Prefer natural chunk_#### order
+    chunkish = [f for f in files if re.match(r"(?i)^chunk_\d+", f)]
+    use = sorted(chunkish) if chunkish else sorted(files)
+    if not use:
+        raise FileNotFoundError(f"No PDF files found in:\n{chunks_dir}")
+    return [os.path.join(chunks_dir, f) for f in use], chunks_dir
+
+
+def build_chunk_meta_from_excel(
+    excel_path,
+    chunks_dir,
+    group_col,
+    name_col,
+    sheets_per_book,
+    log_fn,
+):
+    """
+    Rebuild split metadata from Excel + existing chunk PDFs.
+    sheets_per_book must match the value used when the chunks were created.
+    """
+    sheets_per_book = max(1, int(sheets_per_book or DEFAULT_SHEETS_PER_BOOK))
+    log_fn(f"Reading Excel → {excel_path}")
+    data = pd.read_excel(excel_path, engine="openpyxl")
+    data.columns = [str(c).strip() for c in data.columns]
+
+    if group_col not in data.columns:
+        found = find_column(data.columns, [group_col])
+        if not found:
+            raise ValueError(
+                f"Group column '{group_col}' not found. "
+                f"Available: {', '.join(map(str, data.columns))}"
+            )
+        group_col = found
+        log_fn(f"Using group column → {group_col}")
+
+    if name_col and name_col not in data.columns:
+        found_name = find_column(data.columns, [name_col])
+        name_col = found_name or name_col
+    if not name_col or name_col not in data.columns:
+        name_col = find_column(data.columns, list(PROSPECT_COL_NAMES)) or group_col
+    log_fn(f"Filename → column '{name_col}'")
+
+    grouped = data.groupby(group_col, sort=False)
+    group_keys = [k for k in grouped.groups.keys() if not (pd.isna(k) or str(k).strip() == "")]
+    total = len(group_keys)
+    if total == 0:
+        raise ValueError("No groups found in the Excel file.")
+
+    chunk_paths, resolved_dir = list_chunk_pdfs(chunks_dir)
+    n_books = (total + sheets_per_book - 1) // sheets_per_book
+    log_fn(f"Groups   → {total}")
+    log_fn(f"Expected chunks (groups/{sheets_per_book}) → {n_books}")
+    log_fn(f"Found chunk PDFs → {len(chunk_paths)} in {resolved_dir}")
+
+    if len(chunk_paths) != n_books:
+        raise ValueError(
+            f"Chunk count mismatch.\n\n"
+            f"Excel groups: {total}\n"
+            f"Groups / Excel file: {sheets_per_book}\n"
+            f"Expected chunk PDFs: {n_books}\n"
+            f"Found chunk PDFs: {len(chunk_paths)}\n\n"
+            "Set 'Groups / Excel file' to the same value used when creating the chunks."
+        )
+
+    chunk_meta = []
+    for book_i, pdf_path in enumerate(chunk_paths):
+        start = book_i * sheets_per_book
+        end = min(start + sheets_per_book, total)
+        keys = group_keys[start:end]
+        file_names = []
+        for group_value in keys:
+            g = grouped.get_group(group_value)
+            file_names.append(pick_filename(g, name_col, group_value))
+        # page_counts left empty → split_chunk_pdf infers from PDF page count
+        chunk_meta.append((pdf_path, file_names, []))
+
+    return chunk_meta, resolved_dir, total, group_col, name_col
+
+
+def run_split_only(
+    excel_path,
+    chunks_dir,
+    group_col,
+    name_col,
+    sheets_per_book,
+    log_fn,
+    progress_fn,
+    cancel_check=None,
+    merge_final=False,
+    batch_size=DEFAULT_BATCH,
+    out_dir=None,
+):
+    """
+    Split existing chunk PDFs using filenames rebuilt from an Excel file.
+    """
+    def _raise_if_cancelled(stage=""):
+        if cancel_check and cancel_check():
+            msg = "Cancelled by user"
+            if stage:
+                msg = f"{msg} ({stage})"
+            raise CancelledError(msg)
+
+    progress_fn(0.02)
+    chunk_meta, resolved_chunks, total_groups, group_col, name_col = build_chunk_meta_from_excel(
+        excel_path, chunks_dir, group_col, name_col, sheets_per_book, log_fn,
+    )
+
+    # Write singles next to the chunk folder's parent run folder when possible
+    parent = os.path.dirname(resolved_chunks)
+    if os.path.basename(resolved_chunks).lower() == "output_pdfs":
+        out_dir = out_dir or parent
+    else:
+        out_dir = out_dir or resolved_chunks
+
+    single_dir = os.path.join(out_dir, "output_singles")
+    os.makedirs(single_dir, exist_ok=True)
+
+    log_fn(f"Output   → {out_dir}")
+    progress_fn(0.05)
+
+    _raise_if_cancelled("before split")
+    log_fn(f"\n✂ Splitting {len(chunk_meta)} chunk PDFs into singles…")
+    individual_pdfs, errors = split_all_chunks(
+        chunk_meta, single_dir, log_fn, progress_fn, cancel_check,
+        progress_start=0.05, progress_end=0.85,
+    )
+    log_fn(f"📄 Single PDFs → {single_dir} ({len(individual_pdfs)} files)")
+
+    final_output = None
+    if merge_final:
+        if not individual_pdfs:
+            raise ValueError("No single PDFs were created — nothing to merge.")
+        log_fn(f"\nMerging {len(individual_pdfs)} single PDFs → UCP_format.pdf…")
+        final_output = merge_pdfs(
+            individual_pdfs, out_dir, batch_size, log_fn, progress_fn, cancel_check,
+            progress_start=0.85, progress_end=0.98,
+        )
+        log_fn(f"🏁 Final single PDF → {final_output}")
+    else:
+        log_fn("\nFinal merge skipped (unchecked).")
+
+    progress_fn(1.0)
+    return {
+        "created": total_groups,
+        "errors": len(errors),
+        "final_pdf": final_output,
+        "groups": total_groups,
+        "pdf_dir": resolved_chunks,
+        "single_dir": single_dir,
+        "chunks": len(chunk_meta),
+        "singles": len(individual_pdfs),
+        "split": True,
+        "merged": merge_final and final_output is not None,
+        "out_dir": out_dir,
+    }
 
 
 def split_chunk_pdf(chunk_pdf, filenames, page_counts, single_dir, used_names):
@@ -638,27 +978,23 @@ def run_pipeline(
 
     log_fn(f"\n📁 All chunks done → {pdf_dir} ({len(chunk_pdfs)} files)")
 
+    # Always save metadata so "Split chunks only" can run later
+    try:
+        meta_path = save_chunk_meta(
+            out_dir, chunk_meta, name_col=name_col, group_col=group_col,
+        )
+        log_fn(f"🧾 Split meta → {meta_path}")
+    except Exception as e:
+        log_fn(f"⚠ Could not save split meta: {e}")
+
     # Phase 2: split ALL chunk PDFs into singles (optional, default on)
     if split_singles:
         log_fn(f"\n✂ Splitting {len(chunk_meta)} chunk PDFs into singles…")
-        used_names = set()
-        for i, (pdf_path, file_names, page_counts) in enumerate(chunk_meta, 1):
-            _raise_if_cancelled(f"during split after {len(individual_pdfs)} singles")
-            try:
-                singles = split_chunk_pdf(
-                    pdf_path, file_names, page_counts, single_dir, used_names,
-                )
-                individual_pdfs.extend(singles)
-                if i % LOG_EVERY == 0 or i == len(chunk_meta):
-                    log_fn(
-                        f"  Split [{i}/{len(chunk_meta)}] "
-                        f"{os.path.basename(pdf_path)} → {len(singles)} singles "
-                        f"(total {len(individual_pdfs)})"
-                    )
-            except Exception as e:
-                errors.append((os.path.basename(pdf_path), f"split: {e}"))
-                log_fn(f"❌ Split {os.path.basename(pdf_path)} — {e}")
-            progress_fn(0.70 + 0.20 * (i / max(1, len(chunk_meta))))
+        individual_pdfs, split_errors = split_all_chunks(
+            chunk_meta, single_dir, log_fn, progress_fn, cancel_check,
+            progress_start=0.70, progress_end=0.90,
+        )
+        errors.extend(split_errors)
         log_fn(f"📄 Single PDFs → {single_dir} ({len(individual_pdfs)} files)")
     else:
         log_fn("\nSplit to singles skipped (unchecked).")
@@ -666,37 +1002,13 @@ def run_pipeline(
 
     final_output = None
     if merge_final:
-        # Prefer merging singles when available
         merge_list = individual_pdfs if individual_pdfs else chunk_pdfs
         label = "single" if individual_pdfs else "chunk"
         log_fn(f"\nMerging {len(merge_list)} {label} PDFs → UCP_format.pdf…")
-        batch_files = []
-        merge_batch = max(1, min(batch_size, 500))
-        batch_total = max(1, (len(merge_list) + merge_batch - 1) // merge_batch)
-        for i in range(0, len(merge_list), merge_batch):
-            _raise_if_cancelled("during merge")
-            batch = merge_list[i:i + merge_batch]
-            batch_output = os.path.join(batch_dir, f"batch_{i // merge_batch + 1}.pdf")
-            merger = PdfMerger()
-            for pdf in batch:
-                merger.append(pdf)
-            merger.write(batch_output)
-            merger.close()
-            batch_files.append(batch_output)
-            log_fn(f"  Batch → {os.path.basename(batch_output)} ({len(batch)} files)")
-            progress_fn(0.90 + 0.08 * ((i // merge_batch + 1) / batch_total))
-
-        _raise_if_cancelled("before final PDF")
-        final_output = os.path.join(out_dir, "UCP_format.pdf")
-        if len(batch_files) == 1:
-            import shutil
-            shutil.copy2(batch_files[0], final_output)
-        else:
-            merger = PdfMerger()
-            for bf in batch_files:
-                merger.append(bf)
-            merger.write(final_output)
-            merger.close()
+        final_output = merge_pdfs(
+            merge_list, out_dir, batch_size, log_fn, progress_fn, cancel_check,
+            progress_start=0.90, progress_end=0.98,
+        )
         log_fn(f"🏁 Final single PDF → {final_output}")
     else:
         log_fn("\nFinal merge skipped (unchecked).")
@@ -713,6 +1025,7 @@ def run_pipeline(
         "singles": len(individual_pdfs),
         "split": split_singles,
         "merged": merge_final and final_output is not None,
+        "out_dir": out_dir,
     }
 
 
@@ -723,9 +1036,10 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("UCP Format PDF")
-        self.geometry("760x720")
+        self.geometry("780x820")
         self.configure(fg_color=C["bg"])
         self._path = None
+        self._chunk_run_dir = None
         self._columns = []
         self._cancel_event = threading.Event()
         self._build()
@@ -761,8 +1075,37 @@ class App(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["accent"],
         ).pack(anchor="w", padx=14, pady=8)
 
-        self._sec(body, "Excel file")
-        fr = ctk.CTkFrame(body, fg_color="transparent")
+        self._sec(body, "Mode")
+        mode_fr = ctk.CTkFrame(body, fg_color="transparent")
+        mode_fr.pack(fill="x", pady=(0, 10))
+        self._mode_var = ctk.StringVar(value="From Excel")
+        self._mode_seg = ctk.CTkSegmentedButton(
+            mode_fr,
+            values=["From Excel", "Split chunks only"],
+            variable=self._mode_var,
+            command=self._on_mode_change,
+            font=ctk.CTkFont("Segoe UI", 12),
+            fg_color=C["card"],
+            selected_color=TINT["mid"],
+            selected_hover_color=TINT["bdr"],
+            unselected_color=C["hover"],
+            unselected_hover_color=C["border"],
+            text_color=C["text"],
+        )
+        self._mode_seg.set("From Excel")
+        self._mode_seg.pack(fill="x")
+        ctk.CTkLabel(
+            mode_fr,
+            text="Split chunks only: pick the Excel file + chunk PDF folder (same Groups / Excel file value as when created).",
+            font=ctk.CTkFont("Segoe UI", 10),
+            text_color=C["faint"],
+            anchor="w",
+        ).pack(fill="x", pady=(4, 0))
+
+        self._excel_sec = ctk.CTkFrame(body, fg_color="transparent")
+        self._excel_sec.pack(fill="x")
+        self._sec(self._excel_sec, "Excel file")
+        fr = ctk.CTkFrame(self._excel_sec, fg_color="transparent")
         fr.pack(fill="x", pady=(0, 10))
         self._file_lbl = ctk.CTkLabel(
             fr, text="No file selected", font=ctk.CTkFont("Segoe UI", 12),
@@ -776,13 +1119,40 @@ class App(ctk.CTk):
             text_color=C["text"], command=self._pick,
         ).pack(side="right")
 
+        self._chunk_sec = ctk.CTkFrame(body, fg_color="transparent")
+        # packed/unpacked by mode
+        self._sec(self._chunk_sec, "Chunk PDF folder")
+        cfr = ctk.CTkFrame(self._chunk_sec, fg_color="transparent")
+        cfr.pack(fill="x", pady=(0, 10))
+        self._chunk_lbl = ctk.CTkLabel(
+            cfr, text="No folder selected", font=ctk.CTkFont("Segoe UI", 12),
+            text_color=C["muted"], anchor="w",
+        )
+        self._chunk_lbl.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            cfr, text="Browse…", width=90, height=34,
+            fg_color=C["card"], hover_color=C["hover"],
+            border_color=C["border"], border_width=1,
+            text_color=C["text"], command=self._pick_chunk_run,
+        ).pack(side="right")
+        ctk.CTkLabel(
+            self._chunk_sec,
+            text="Select the folder with chunk_0001.pdf… (or the run folder containing output_pdfs).",
+            font=ctk.CTkFont("Segoe UI", 10),
+            text_color=C["faint"],
+            anchor="w",
+        ).pack(fill="x", pady=(0, 8))
+
         self._sec(body, "Settings")
-        settings = ctk.CTkFrame(
+        self._settings = ctk.CTkFrame(
             body, fg_color=C["card"], corner_radius=12,
             border_width=1, border_color=C["border"],
         )
-        settings.pack(fill="x", pady=(0, 10))
-        settings.columnconfigure(1, weight=1)
+        self._settings.pack(fill="x", pady=(0, 10))
+        self._settings.columnconfigure(1, weight=1)
+        settings = self._settings
+
+        self._excel_only_widgets = []
 
         self._group_cb = self._dropdown(
             settings, 0, "Group by column",
@@ -814,6 +1184,9 @@ class App(ctk.CTk):
             settings, 5, "PDF merge batch", str(DEFAULT_BATCH),
             "Used only when final merge is enabled. How many PDFs to merge per intermediate batch.",
         )
+        self._excel_only_widgets = [
+            self._header_e, self._wide_cb,
+        ]
         self._split_var = ctk.BooleanVar(value=True)
         self._split_cb = ctk.CTkCheckBox(
             settings,
@@ -892,6 +1265,88 @@ class App(ctk.CTk):
             command=self._cancel,
         )
         self._cancel_btn.pack(side="right")
+
+        self._on_mode_change("From Excel")
+
+    def _is_split_only(self) -> bool:
+        return self._mode_seg.get() == "Split chunks only"
+
+    def _on_mode_change(self, value=None):
+        split_only = self._is_split_only()
+        self._excel_sec.pack_forget()
+        self._chunk_sec.pack_forget()
+        if split_only:
+            # Need Excel (for names) + chunk folder
+            self._excel_sec.pack(fill="x", before=self._settings)
+            self._chunk_sec.pack(fill="x", before=self._settings)
+            self._split_var.set(True)
+            self._split_cb.configure(state="disabled")
+            for w in self._excel_only_widgets:
+                try:
+                    w.configure(state="disabled")
+                except Exception:
+                    pass
+            # Keep group / filename / speed enabled for rebuild-from-Excel
+            for w in (self._group_cb, self._name_cb):
+                try:
+                    w.configure(state="readonly")
+                except Exception:
+                    try:
+                        w.configure(state="normal")
+                    except Exception:
+                        pass
+            try:
+                self._speed_e.configure(state="normal")
+            except Exception:
+                pass
+            self._run_btn.configure(text="▶  Split Chunk PDFs")
+            self._stat.configure(
+                text="Split-only — pick Excel + chunk folder (same Groups / Excel file as creation).",
+                text_color=C["muted"],
+            )
+        else:
+            self._excel_sec.pack(fill="x", before=self._settings)
+            self._split_cb.configure(state="normal")
+            for w in self._excel_only_widgets:
+                try:
+                    w.configure(state="normal")
+                except Exception:
+                    pass
+            for w in (self._group_cb, self._name_cb):
+                try:
+                    w.configure(state="readonly")
+                except Exception:
+                    pass
+            try:
+                self._speed_e.configure(state="normal")
+            except Exception:
+                pass
+            self._run_btn.configure(text="▶  Generate UCP PDFs")
+            self._stat.configure(text="Ready.", text_color=C["muted"])
+
+    def _pick_chunk_run(self):
+        initial = BASE_OUT if os.path.isdir(BASE_OUT) else os.path.expanduser("~")
+        path = filedialog.askdirectory(
+            title="Select chunk PDF folder (or run folder with output_pdfs)",
+            initialdir=initial,
+        )
+        if not path:
+            return
+        try:
+            paths, resolved = list_chunk_pdfs(path)
+            self._chunk_run_dir = resolved
+            self._chunk_lbl.configure(
+                text=f"{os.path.basename(resolved)}  ({len(paths)} PDFs)",
+                text_color=C["accent"],
+            )
+            self._stat.configure(
+                text=f"Chunk folder ready — {len(paths)} PDFs",
+                text_color=C["accent"],
+            )
+        except Exception as e:
+            self._chunk_run_dir = None
+            self._chunk_lbl.configure(text="No folder selected", text_color=C["muted"])
+            messagebox.showerror("Invalid folder", str(e))
 
     def _dropdown(self, parent, row, label, values, default, hint):
         ctk.CTkLabel(
@@ -994,6 +1449,60 @@ class App(ctk.CTk):
             messagebox.showerror("Error", f"Could not read Excel:\n{e}")
 
     def _start(self):
+        merge_final = bool(self._merge_var.get())
+        split_singles = bool(self._split_var.get())
+
+        if self._is_split_only():
+            if not self._path:
+                messagebox.showwarning("Missing", "Select the Excel file used to create the chunks.")
+                return
+            if not self._columns:
+                messagebox.showwarning("Missing", "Load the Excel file so columns appear in the dropdowns.")
+                return
+            if not self._chunk_run_dir:
+                messagebox.showwarning("Missing", "Select the chunk PDF folder.")
+                return
+            group_col = self._group_cb.get().strip()
+            name_col = self._name_cb.get().strip()
+            if not group_col:
+                messagebox.showwarning("Missing", "Select a group-by column.")
+                return
+            if not name_col:
+                messagebox.showwarning("Missing", "Select a filename column.")
+                return
+            try:
+                batch = int(self._batch_e.get().strip())
+                if batch < 1:
+                    raise ValueError
+            except ValueError:
+                messagebox.showwarning("Invalid", "PDF merge batch must be a positive number.")
+                return
+            try:
+                sheets_per_book = int(self._speed_e.get().strip())
+                if sheets_per_book < 1:
+                    raise ValueError
+            except ValueError:
+                messagebox.showwarning("Invalid", "Groups / Excel file must be a positive number.")
+                return
+
+            self._cancel_event.clear()
+            self._run_btn.configure(state="disabled", text="Splitting…")
+            self._cancel_btn.configure(state="normal", text="Cancel")
+            self._stat.configure(text="Splitting chunk PDFs…", text_color=C["accent"])
+            self._prog.set(0)
+            self._log.configure(state="normal")
+            self._log.delete("1.0", "end")
+            self._log.configure(state="disabled")
+            threading.Thread(
+                target=self._run_split_only,
+                args=(
+                    self._path, self._chunk_run_dir, group_col, name_col,
+                    sheets_per_book, merge_final, batch,
+                ),
+                daemon=True,
+            ).start()
+            return
+
         if not self._path:
             messagebox.showwarning("Missing", "Select an Excel file first.")
             return
@@ -1029,9 +1538,6 @@ class App(ctk.CTk):
             messagebox.showwarning("Invalid", "Groups / Excel file must be a positive number.")
             return
 
-        merge_final = bool(self._merge_var.get())
-        split_singles = bool(self._split_var.get())
-
         self._cancel_event.clear()
         self._run_btn.configure(state="disabled", text="Processing…")
         self._cancel_btn.configure(state="normal", text="Cancel")
@@ -1055,14 +1561,78 @@ class App(ctk.CTk):
         self._cancel_event.set()
         self._cancel_btn.configure(state="disabled", text="Cancelling…")
         self._stat.configure(
-            text="Cancelling… finishing current Excel chunk, then stopping safely.",
+            text="Cancelling… finishing current step, then stopping safely.",
             text_color=C["accent"],
         )
-        self._write("\n⏹ Cancel requested — will stop after the current Excel chunk…")
+        self._write("\n⏹ Cancel requested — will stop after the current step…")
 
     def _set_idle_buttons(self):
-        self._run_btn.configure(state="normal", text="▶  Generate UCP PDFs")
+        label = "▶  Split Chunk PDFs" if self._is_split_only() else "▶  Generate UCP PDFs"
+        self._run_btn.configure(state="normal", text=label)
         self._cancel_btn.configure(state="disabled", text="Cancel")
+
+    def _finish_ok(self, stats, out_dir):
+        done_msg = f"Done — {stats.get('chunks', 0)} chunks"
+        if stats.get("split"):
+            done_msg += f", {stats.get('singles', 0)} singles"
+        if stats.get("merged") and stats.get("final_pdf"):
+            done_msg += " + final merge"
+        done_msg += f", {stats['errors']} errors."
+        self._stat.configure(text=done_msg, text_color=C["green"])
+        subprocess.Popen(["explorer", out_dir])
+
+        result_lines = []
+        if not self._is_split_only() and stats.get("created") is not None:
+            result_lines.append(f"Groups processed: {stats['created']}")
+        result_lines.append(f"Chunk PDFs: {stats.get('chunks', 0)}")
+        if stats.get("split"):
+            result_lines.append(f"Single PDFs: {stats.get('singles', 0)}")
+        result_lines.append(f"Errors: {stats['errors']}")
+        result_lines.append(f"Chunk folder: {stats.get('pdf_dir', out_dir)}")
+        if stats.get("split"):
+            result_lines.append(f"Singles folder: {stats.get('single_dir', out_dir)}")
+        else:
+            result_lines.append("Split to singles: skipped")
+        if stats.get("merged") and stats.get("final_pdf"):
+            result_lines.append(f"Final merge: {stats['final_pdf']}")
+        else:
+            result_lines.append("Final merge: skipped")
+        messagebox.showinfo("Complete", "\n".join(result_lines))
+
+    def _run_split_only(self, excel_path, chunks_dir, group_col, name_col, sheets_per_book, merge_final, batch):
+        def log(m):
+            self.after(0, lambda x=m: self._write(x))
+
+        def prog(p):
+            self.after(0, lambda v=p: self._prog.set(v))
+
+        try:
+            stats = run_split_only(
+                excel_path, chunks_dir, group_col, name_col, sheets_per_book,
+                log, prog,
+                cancel_check=self._cancel_event.is_set,
+                merge_final=merge_final,
+                batch_size=batch,
+            )
+            out_dir = stats.get("out_dir") or chunks_dir
+            self.after(0, lambda: self._finish_ok(stats, out_dir))
+        except CancelledError as e:
+            log(f"\n⏹ {e}")
+            self.after(0, lambda: self._stat.configure(
+                text="Cancelled — partial files kept.",
+                text_color=C["accent"],
+            ))
+            self.after(0, lambda: subprocess.Popen(["explorer", chunks_dir]))
+            self.after(0, lambda: messagebox.showinfo(
+                "Cancelled",
+                "Process stopped safely.\n\nAny PDFs already created were kept.",
+            ))
+        except Exception as e:
+            log(f"\nError: {e}")
+            self.after(0, lambda: self._stat.configure(text=str(e), text_color=C["red"]))
+            self.after(0, lambda: messagebox.showerror("Error", str(e)))
+        finally:
+            self.after(0, self._set_idle_buttons)
 
     def _run(self, group_col, header, wide_col, batch, sheets_per_book, merge_final, name_col, split_singles):
         out_dir = get_output_dir()
@@ -1082,39 +1652,7 @@ class App(ctk.CTk):
                 name_col=name_col,
                 split_singles=split_singles,
             )
-            done_msg = (
-                f"Done — {stats['created']} groups, "
-                f"{stats.get('chunks', 0)} chunks"
-            )
-            if stats.get("split"):
-                done_msg += f", {stats.get('singles', 0)} singles"
-            if stats.get("merged") and stats.get("final_pdf"):
-                done_msg += " + final merge"
-            done_msg += f", {stats['errors']} errors."
-            self.after(0, lambda: self._stat.configure(
-                text=done_msg,
-                text_color=C["green"],
-            ))
-            self.after(0, lambda: subprocess.Popen(["explorer", out_dir]))
-            result_lines = [
-                f"Groups processed: {stats['created']}",
-                f"Chunk PDFs: {stats.get('chunks', 0)}",
-                f"Errors: {stats['errors']}",
-                f"Chunk folder: {stats.get('pdf_dir', out_dir)}",
-            ]
-            if stats.get("split"):
-                result_lines.insert(2, f"Single PDFs: {stats.get('singles', 0)}")
-                result_lines.append(f"Singles folder: {stats.get('single_dir', out_dir)}")
-            else:
-                result_lines.append("Split to singles: skipped")
-            if stats.get("merged") and stats.get("final_pdf"):
-                result_lines.append(f"Final merge: {stats['final_pdf']}")
-            else:
-                result_lines.append("Final merge: skipped")
-            self.after(0, lambda: messagebox.showinfo(
-                "Complete",
-                "\n".join(result_lines),
-            ))
+            self.after(0, lambda: self._finish_ok(stats, out_dir))
         except CancelledError as e:
             log(f"\n⏹ {e}")
             log(f"Partial output kept in → {out_dir}")
