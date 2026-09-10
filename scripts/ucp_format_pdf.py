@@ -30,6 +30,12 @@ DEFAULT_HEADER = "IIFL | Prospect No - {prospect_no}"
 DEFAULT_BATCH = 500
 WIDE_WIDTH = 70
 
+
+class CancelledError(Exception):
+    """Raised when the user cancels a running UCP job."""
+    pass
+
+
 C = {
     "bg":     "#0a0a0f", "card":   "#16161f", "hover":  "#1e1e2e",
     "border": "#2a2a3d", "text":   "#e8e8f0", "muted":  "#8888aa",
@@ -61,23 +67,51 @@ def find_column(columns, preferred_names):
     return None
 
 
-def resolve_header(template: str, prospect_no) -> str:
+PROSPECT_COL_NAMES = (
+    DEFAULT_GROUP_COL, "prospect_no", "Prospect No", "ProspectNo", "Prospect Number",
+)
+
+
+def pick_prospect_no(group_df, group_value):
     """
-    Replace {prospect_no} / {group} placeholders. If none present, append
-    the group value so the ID still appears.
+    Value for {prospect_no}: always from a Prospect_No column when present,
+    not from the group-by key (which may be barcode / another ID).
+    """
+    prospect_col = find_column(group_df.columns, list(PROSPECT_COL_NAMES))
+    if prospect_col is None:
+        return group_value
+    series = group_df[prospect_col].dropna()
+    if series.empty:
+        return group_value
+    vals = series.astype(str).str.strip()
+    vals = vals[vals != ""]
+    unique = vals.unique()
+    if len(unique) == 0:
+        return group_value
+    return unique[0]
+
+
+def resolve_header(template: str, group_value, prospect_no=None) -> str:
+    """
+    Replace placeholders:
+      {prospect_no} / {Prospect_No} → Prospect_No column value
+      {group} / {GROUP}             → group-by column value
+    If no placeholder is present, append the prospect no (fallback: group).
     """
     text = template or DEFAULT_HEADER
+    p = prospect_no if prospect_no is not None else group_value
+    g = group_value
     replacements = {
-        "{prospect_no}": str(prospect_no),
-        "{Prospect_No}": str(prospect_no),
-        "{group}": str(prospect_no),
-        "{GROUP}": str(prospect_no),
+        "{prospect_no}": str(p),
+        "{Prospect_No}": str(p),
+        "{group}": str(g),
+        "{GROUP}": str(g),
     }
     out = text
     for k, v in replacements.items():
         out = out.replace(k, v)
     if not any(k in text for k in replacements):
-        out = f"{text} - {prospect_no}"
+        out = f"{text} - {p}"
     return out
 
 
@@ -264,13 +298,22 @@ def run_pipeline(
     batch_size,
     log_fn,
     progress_fn,
+    cancel_check=None,
 ):
+    def _raise_if_cancelled(stage=""):
+        if cancel_check and cancel_check():
+            msg = "Cancelled by user"
+            if stage:
+                msg = f"{msg} ({stage})"
+            raise CancelledError(msg)
+
     excel_dir = os.path.join(out_dir, "output_excels")
     pdf_dir = os.path.join(out_dir, "output_pdfs")
     batch_dir = os.path.join(out_dir, "output_batches")
     for d in (excel_dir, pdf_dir, batch_dir):
         os.makedirs(d, exist_ok=True)
 
+    _raise_if_cancelled("before read")
     log_fn(f"Reading → {input_file}")
     data = pd.read_excel(input_file, engine="openpyxl")
     data.columns = [str(c).strip() for c in data.columns]
@@ -286,12 +329,27 @@ def run_pipeline(
         group_col = found
         log_fn(f"Using group column → {group_col}")
 
+    prospect_col = find_column(data.columns, list(PROSPECT_COL_NAMES))
+    keep_cols = [group_col]
+    if prospect_col and prospect_col not in keep_cols:
+        keep_cols.append(prospect_col)
+
     before_cols = list(data.columns)
-    data, dropped_global = drop_empty_columns(data, keep=(group_col,))
+    data, dropped_global = drop_empty_columns(data, keep=tuple(keep_cols))
     if dropped_global:
         log_fn(f"Dropped empty columns ({len(dropped_global)}): {', '.join(dropped_global)}")
     else:
         log_fn(f"Columns → {len(before_cols)} (none empty)")
+
+    # Re-resolve after drops (column may still exist)
+    prospect_col = find_column(data.columns, list(PROSPECT_COL_NAMES))
+    if prospect_col:
+        log_fn(f"Header {{prospect_no}} → column '{prospect_col}'")
+    else:
+        log_fn(
+            "⚠ No Prospect_No column found — "
+            "{prospect_no} will use the group-by value"
+        )
 
     # Resolve wide column against remaining headers
     wide_resolved = None
@@ -309,6 +367,7 @@ def run_pipeline(
     if date_cols:
         log_fn(f"Date columns (DD-MM-YYYY) → {', '.join(date_cols)}")
 
+    _raise_if_cancelled("before grouping")
     groups = list(data.groupby(group_col, sort=False))
     total = len(groups)
     if total == 0:
@@ -331,22 +390,28 @@ def run_pipeline(
     created = 0
     errors = []
     try:
-        for i, (prospect_no, group) in enumerate(groups, 1):
-            if pd.isna(prospect_no) or str(prospect_no).strip() == "":
+        for i, (group_value, group) in enumerate(groups, 1):
+            _raise_if_cancelled(f"after {created} PDF(s)")
+
+            if pd.isna(group_value) or str(group_value).strip() == "":
                 log_fn(f"⏭ Skipping blank {group_col} group")
                 continue
 
-            safe_name = re.sub(r'[<>:"/\\|?*]', "_", str(prospect_no).strip())
+            safe_name = re.sub(r'[<>:"/\\|?*]', "_", str(group_value).strip())
             excel_path = os.path.join(excel_dir, f"{safe_name}.xlsx")
             pdf_path = os.path.join(pdf_dir, f"{safe_name}.pdf")
 
             g = group.copy()
-            # Drop columns empty for this prospect only (keep group col)
-            g, dropped_group = drop_empty_columns(g, keep=(group_col,))
+            # Drop columns empty for this group only (keep group + prospect cols)
+            keep_group = [group_col]
+            if prospect_col and prospect_col in g.columns and prospect_col not in keep_group:
+                keep_group.append(prospect_col)
+            g, dropped_group = drop_empty_columns(g, keep=tuple(keep_group))
             wide_for_group = wide_resolved if wide_resolved in g.columns else None
             date_cols_group = [c for c in date_cols if c in g.columns]
             g.insert(0, "SrNo", range(1, len(g) + 1))
-            header_text = resolve_header(header_template, prospect_no)
+            prospect_no = pick_prospect_no(g, group_value)
+            header_text = resolve_header(header_template, group_value, prospect_no)
 
             try:
                 write_group_excel(
@@ -368,6 +433,8 @@ def run_pipeline(
         except Exception:
             pass
 
+    _raise_if_cancelled(f"before merge — {created} PDF(s) kept")
+
     # Ordered PDFs by first appearance of group value
     prospect_order = data[group_col].dropna().unique()
     ordered_pdfs = [
@@ -381,7 +448,9 @@ def run_pipeline(
 
     log_fn(f"\nMerging {len(ordered_pdfs)} PDFs in batches of {batch_size}…")
     batch_files = []
+    batch_total = max(1, (len(ordered_pdfs) + batch_size - 1) // batch_size)
     for i in range(0, len(ordered_pdfs), batch_size):
+        _raise_if_cancelled("during merge")
         batch = ordered_pdfs[i:i + batch_size]
         batch_output = os.path.join(batch_dir, f"batch_{i // batch_size + 1}.pdf")
         merger = PdfMerger()
@@ -391,8 +460,9 @@ def run_pipeline(
         merger.close()
         batch_files.append(batch_output)
         log_fn(f"  Batch → {os.path.basename(batch_output)} ({len(batch)} files)")
-        progress_fn(0.7 + 0.2 * ((i // batch_size + 1) / max(1, (len(ordered_pdfs) + batch_size - 1) // batch_size)))
+        progress_fn(0.7 + 0.2 * ((i // batch_size + 1) / batch_total))
 
+    _raise_if_cancelled("before final PDF")
     final_output = os.path.join(out_dir, "UCP_format.pdf")
     merger = PdfMerger()
     for bf in batch_files:
@@ -418,6 +488,7 @@ class App(ctk.CTk):
         self.configure(fg_color=C["bg"])
         self._path = None
         self._columns = []
+        self._cancel_event = threading.Event()
         self._build()
 
     def _build(self):
@@ -482,7 +553,7 @@ class App(ctk.CTk):
         )
         self._header_e = self._field(
             settings, 1, "Header text", DEFAULT_HEADER,
-            "Use {prospect_no} where the group value should appear.",
+            "Use {prospect_no} for Prospect No, {group} for the group-by value.",
         )
         self._wide_cb = self._dropdown(
             settings, 2, "Wide column",
@@ -513,14 +584,27 @@ class App(ctk.CTk):
         )
         self._log.pack(fill="x", pady=(0, 12))
 
+        btn_row = ctk.CTkFrame(body, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(0, 16))
+
         self._run_btn = ctk.CTkButton(
-            body, text="▶  Generate UCP PDFs",
+            btn_row, text="▶  Generate UCP PDFs",
             font=ctk.CTkFont("Segoe UI", 14, "bold"),
             fg_color=TINT["mid"], hover_color=TINT["bdr"],
             text_color=C["accent"], border_color=C["accent"], border_width=1,
             corner_radius=24, height=46, command=self._start,
         )
-        self._run_btn.pack(fill="x", pady=(0, 16))
+        self._run_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        self._cancel_btn = ctk.CTkButton(
+            btn_row, text="Cancel", width=120,
+            font=ctk.CTkFont("Segoe UI", 13, "bold"),
+            fg_color=C["card"], hover_color="#3a1520",
+            text_color=C["red"], border_color=C["red"], border_width=1,
+            corner_radius=24, height=46, state="disabled",
+            command=self._cancel,
+        )
+        self._cancel_btn.pack(side="right")
 
     def _dropdown(self, parent, row, label, values, default, hint):
         ctk.CTkLabel(
@@ -640,7 +724,10 @@ class App(ctk.CTk):
             messagebox.showwarning("Invalid", "Batch size must be a positive number.")
             return
 
+        self._cancel_event.clear()
         self._run_btn.configure(state="disabled", text="Processing…")
+        self._cancel_btn.configure(state="normal", text="Cancel")
+        self._stat.configure(text="Running… (Cancel stops after the current group)", text_color=C["accent"])
         self._prog.set(0)
         self._log.configure(state="normal")
         self._log.delete("1.0", "end")
@@ -650,6 +737,21 @@ class App(ctk.CTk):
             args=(group_col, header, wide_col, batch),
             daemon=True,
         ).start()
+
+    def _cancel(self):
+        if self._cancel_event.is_set():
+            return
+        self._cancel_event.set()
+        self._cancel_btn.configure(state="disabled", text="Cancelling…")
+        self._stat.configure(
+            text="Cancelling… finishing current group, then stopping safely.",
+            text_color=C["accent"],
+        )
+        self._write("\n⏹ Cancel requested — will stop after the current group…")
+
+    def _set_idle_buttons(self):
+        self._run_btn.configure(state="normal", text="▶  Generate UCP PDFs")
+        self._cancel_btn.configure(state="disabled", text="Cancel")
 
     def _run(self, group_col, header, wide_col, batch):
         out_dir = get_output_dir()
@@ -663,6 +765,7 @@ class App(ctk.CTk):
         try:
             stats = run_pipeline(
                 self._path, out_dir, group_col, header, wide_col, batch, log, prog,
+                cancel_check=self._cancel_event.is_set,
             )
             self.after(0, lambda: self._stat.configure(
                 text=f"Done — {stats['created']} PDFs, {stats['errors']} errors.",
@@ -675,14 +778,25 @@ class App(ctk.CTk):
                 f"Errors: {stats['errors']}\n\n"
                 f"{stats['final_pdf']}",
             ))
+        except CancelledError as e:
+            log(f"\n⏹ {e}")
+            log(f"Partial output kept in → {out_dir}")
+            self.after(0, lambda: self._stat.configure(
+                text="Cancelled — partial files kept in output folder.",
+                text_color=C["accent"],
+            ))
+            self.after(0, lambda: subprocess.Popen(["explorer", out_dir]))
+            self.after(0, lambda: messagebox.showinfo(
+                "Cancelled",
+                "Process stopped safely.\n\n"
+                "Any PDFs already created were kept in the output folder.",
+            ))
         except Exception as e:
             log(f"\nError: {e}")
             self.after(0, lambda: self._stat.configure(text=str(e), text_color=C["red"]))
             self.after(0, lambda: messagebox.showerror("Error", str(e)))
         finally:
-            self.after(0, lambda: self._run_btn.configure(
-                state="normal", text="▶  Generate UCP PDFs",
-            ))
+            self.after(0, self._set_idle_buttons)
 
 
 if __name__ == "__main__":
