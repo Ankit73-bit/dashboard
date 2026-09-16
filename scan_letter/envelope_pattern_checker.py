@@ -18,16 +18,26 @@ if _HERE not in sys.path:
 
 try:
     import check_envelope_pattern_batch as checker  # noqa: E402
-except ModuleNotFoundError:
+except ModuleNotFoundError as e:
     import tkinter as _tk
     from tkinter import messagebox as _mb
+    _missing = getattr(e, "name", None) or str(e)
+    _batch = os.path.join(_HERE, "check_envelope_pattern_batch.py")
     _root = _tk.Tk()
     _root.withdraw()
-    _mb.showerror(
-        "Envelope Pattern Checker",
-        "Could not load check_envelope_pattern_batch.py from scan_letter.\n\n"
-        f"Expected:\n{os.path.join(_HERE, 'check_envelope_pattern_batch.py')}"
-    )
+    if _missing == "check_envelope_pattern_batch" or not os.path.isfile(_batch):
+        _msg = (
+            "Could not load check_envelope_pattern_batch.py from scan_letter.\n\n"
+            f"Expected:\n{_batch}"
+        )
+    else:
+        _msg = (
+            f"Missing Python package: {_missing}\n\n"
+            "Install dependencies with setup.bat, or run:\n"
+            f"  python -m pip install {_missing}\n\n"
+            f"Also needs Tesseract-OCR installed on Windows."
+        )
+    _mb.showerror("Envelope Pattern Checker", _msg)
     _root.destroy()
     raise SystemExit(1)
 
