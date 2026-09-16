@@ -142,11 +142,11 @@ GROUPS = [
     },
     {
         "title":       "PDF Tools",
-        "description": "Watermark, generate, split/rename, remove pages, split/zip, and match tracking PDFs.",
+        "description": "Watermark, generate, split/rename, remove pages, split/zip, match tracking, and Excel-mapped merge.",
         "icon":        "📄",
         "accent":      C["purple"],
         "tag":         "PDF",
-        "count":       "6 tools",
+        "count":       "7 tools",
         "tools": [
                 {
                     "title":       "PDF Watermark",
@@ -319,6 +319,33 @@ GROUPS = [
                             "Missing barcodes are listed in missing.txt in the OUTPUT run folder.",
                         ],
                         "output": "<batch folder>\\Tracking\\MERGED.pdf  |  Desktop\\OUTPUT\\Tracking_PDF_Matcher\\YYYY-MM-DD_HH-MM-SS\\",
+                    },
+                },
+                {
+                    "title":       "Excel Mapped PDF Merger",
+                    "sample":      None,
+                    "description": "Merge 3 PDF folders per Excel row using different filename columns (e.g. notice + dispatch + tracking).",
+                    "icon":        "📎",
+                    "accent":      C["purple"],
+                    "tag":         "PDF · Excel · Merge",
+                    "script":      os.path.join(SCRIPTS, "excel_mapped_pdf_merger.py"),
+                    "docs": {
+                        "what": "For each Excel row, finds one PDF from each of three folders using a mapped column value as the filename, then merges them in order (Notice → Dispatch Proof → Tracking Proof) into a single output PDF named from a chosen column.",
+                        "when": "Use this when notice PDFs are named by loan number while dispatch/tracking proofs are named by barcode, and one Excel sheet maps those fields together.",
+                        "steps": [
+                            ("Open the tool", "Click 'Launch →' on the Excel Mapped PDF Merger card under PDF Tools."),
+                            ("Select Excel file", "Browse to the mapping sheet. Sheet and column dropdowns fill automatically."),
+                            ("Select the 3 PDF folders", "Browse Notice, Dispatch Proof, and Tracking Proof folders."),
+                            ("Map columns via dropdowns", "Choose Excel sheet, then filename columns for each folder (e.g. Loan No / Barcode / Barcode), plus the output name column."),
+                            ("Click Merge PDFs", "Rows with all three PDFs found are merged; incomplete rows are skipped and logged."),
+                        ],
+                        "tips": [
+                            "PDFs must be named exactly <column value>.pdf (case-insensitive). Subfolders are searched.",
+                            "Merge order is always Folder 1 → Folder 2 → Folder 3 as shown in the UI.",
+                            "If any of the three PDFs is missing for a row, that row is skipped (see merge_log.csv).",
+                            "Duplicate output names get a suffix (_2, _3, …).",
+                        ],
+                        "output": "Desktop\\OUTPUT\\Excel_Mapped_PDF_Merger\\YYYY-MM-DD_HH-MM-SS\\merged_pdfs\\",
                     },
                 },
         ],
