@@ -96,12 +96,12 @@ SCAN_SERVICES = [
             "when": "Use as the final Scan step after matching, when you need one combined PDF per matched prospect from multiple PDF sources.",
             "steps": [
                 ("Select Excel folder", "Excel files with remark column from Step 3 (Exact Match / Fuzzy Match)."),
-                ("Pick PDF sources", "Tick at least 2 of: Renamed PDFs, UCP, Tracking — and browse each folder."),
+                ("Pick PDF sources", "Tick at least 1 of: Renamed PDFs, UCP, Tracking — and browse each folder."),
                 ("Map columns", "Confirm Barcode, Prospect No, and Remark columns (auto-detected when possible)."),
                 ("Click Run", "Matched rows are merged; merge_log.csv records success and skips."),
             ],
             "tips": [
-                "At least two PDF source folders must be selected.",
+                "At least one PDF source folder must be selected (you can still pick 2 or 3).",
                 "Only rows whose remark contains Exact Match or Fuzzy Match are processed.",
                 "Output files are named <prospect_no>-<barcode>.pdf.",
             ],

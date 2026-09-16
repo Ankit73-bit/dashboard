@@ -259,7 +259,7 @@ class App(ctk.CTk):
                       border_color=C["border"], border_width=1,
                       text_color=C["text"], command=self._pick_excel).pack(side="right")
 
-        self._sec(body, "PDF sources (select at least 2)")
+        self._sec(body, "PDF sources (select at least 1)")
         src_card = ctk.CTkFrame(body, fg_color=C["card"], corner_radius=12,
                                 border_width=1, border_color=C["border"])
         src_card.pack(fill="x", pady=(0, 12))
@@ -372,8 +372,8 @@ class App(ctk.CTk):
                     messagebox.showwarning("Missing", f"Browse a folder for {label}.")
                     return
                 selected.append((label, path))
-        if len(selected) < 2:
-            messagebox.showwarning("Sources", "Select at least 2 PDF source folders.")
+        if len(selected) < 1:
+            messagebox.showwarning("Sources", "Select at least 1 PDF source folder.")
             return
 
         col_map = {k: cb.get().strip() for k, cb in self._combos.items()}
