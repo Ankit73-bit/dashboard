@@ -142,11 +142,11 @@ GROUPS = [
     },
     {
         "title":       "PDF Tools",
-        "description": "Watermark, generate, split/rename, remove pages, split/zip, match tracking, and Excel-mapped merge.",
+        "description": "Watermark, generate, merge, split/rename, remove pages, split/zip, match tracking, and Excel-mapped merge.",
         "icon":        "📄",
         "accent":      C["purple"],
         "tag":         "PDF",
-        "count":       "7 tools",
+        "count":       "8 tools",
         "tools": [
                 {
                     "title":       "PDF Watermark",
@@ -178,6 +178,32 @@ GROUPS = [
                             "If a file fails (e.g. password-protected PDF), it is skipped and logged — other files still process normally.",
                         ],
                         "output": "Desktop\\OUTPUT\\PDF_Watermark\\YYYY-MM-DD_HH-MM-SS\\",
+                    },
+                },
+                {
+                    "title":       "PDF Merger",
+                    "sample":      None,
+                    "description": "Merge selected PDF files and/or all PDFs from folders into one combined PDF.",
+                    "icon":        "🧩",
+                    "accent":      C["purple"],
+                    "tag":         "PDF · Merge",
+                    "script":      os.path.join(SCRIPTS, "pdf_merger.py"),
+                    "docs": {
+                        "what": "Combines multiple PDFs into a single file. You can add individual PDF files, whole folders, or both. Folder PDFs are included in name order; optional subfolder scan is supported.",
+                        "when": "Use this when you need one combined PDF from a batch of files — for example packing notices, stickers, or scanned pages together.",
+                        "steps": [
+                            ("Open the tool", "Click 'Launch →' on the PDF Merger card under PDF Tools."),
+                            ("Add Files and/or Folder", "Use 'Add Files' for specific PDFs and/or 'Add Folder' for every PDF in a directory. You can mix both and remove items with ✕."),
+                            ("Set output name", "Default is merged.pdf — change if you want a custom filename."),
+                            ("Optional: subfolders", "Leave 'Include PDFs in subfolders' checked to also pick PDFs nested under selected folders."),
+                            ("Click Merge PDFs", "One combined PDF is written to the OUTPUT folder and selected in Explorer."),
+                        ],
+                        "tips": [
+                            "Files keep the order you added them; folder contents are sorted by filename.",
+                            "Corrupt or password-protected PDFs are skipped and listed in the log.",
+                            "Original files are never modified.",
+                        ],
+                        "output": "Desktop\\OUTPUT\\PDF_Merger\\YYYY-MM-DD_HH-MM-SS\\",
                     },
                 },
                 {
