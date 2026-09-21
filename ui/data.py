@@ -142,11 +142,11 @@ GROUPS = [
     },
     {
         "title":       "PDF Tools",
-        "description": "Watermark, generate, merge, split/rename, remove pages, split/zip, match tracking, and Excel-mapped merge.",
+        "description": "Watermark, generate, merge, compress, split/rename, remove pages, split/zip, match tracking, and Excel-mapped merge.",
         "icon":        "📄",
         "accent":      C["purple"],
         "tag":         "PDF",
-        "count":       "8 tools",
+        "count":       "9 tools",
         "tools": [
                 {
                     "title":       "PDF Watermark",
@@ -204,6 +204,31 @@ GROUPS = [
                             "Original files are never modified.",
                         ],
                         "output": "Desktop\\OUTPUT\\PDF_Merger\\YYYY-MM-DD_HH-MM-SS\\",
+                    },
+                },
+                {
+                    "title":       "PDF Compress",
+                    "sample":      None,
+                    "description": "Compress selected PDF files and/or all PDFs from folders to reduce file size.",
+                    "icon":        "🗜️",
+                    "accent":      C["cyan"],
+                    "tag":         "PDF · Compress",
+                    "script":      os.path.join(SCRIPTS, "pdf_compress.py"),
+                    "docs": {
+                        "what": "Compresses each selected PDF into a smaller copy. Add individual files, whole folders, or both. Uses Ghostscript when installed (best for scanned PDFs); otherwise uses pypdf content-stream compression.",
+                        "when": "Use this when PDFs are too large for email, upload, or sharing and you need smaller files without changing the originals.",
+                        "steps": [
+                            ("Open the tool", "Click 'Launch →' on the PDF Compress card under PDF Tools."),
+                            ("Add Files and/or Folder", "Use 'Add Files' and/or 'Add Folder'. Mix both if needed; remove items with ✕."),
+                            ("Choose quality", "Screen = smallest; eBook = balanced (default); Printer / Prepress = higher quality. Quality applies when Ghostscript is available."),
+                            ("Click Compress PDFs", "Compressed copies are saved to the OUTPUT folder with the same filenames."),
+                        ],
+                        "tips": [
+                            "Install Ghostscript for much better compression on image/scanned PDFs.",
+                            "If a file cannot shrink, it is copied as-is (logged as no gain).",
+                            "Original files are never modified.",
+                        ],
+                        "output": "Desktop\\OUTPUT\\PDF_Compress\\YYYY-MM-DD_HH-MM-SS\\",
                     },
                 },
                 {
