@@ -403,11 +403,11 @@ GROUPS = [
     },
     {
         "title":       "Excel Tools",
-        "description": "Deduplicate, convert, transform, separate by CUID, build sticker sheets, and format UCP PDFs.",
+        "description": "Deduplicate, convert, transform (incl. RBL), separate by CUID, build sticker sheets, and format UCP PDFs.",
         "icon":        "📊",
         "accent":      C["orange"],
         "tag":         "Excel",
-        "count":       "6 tools",
+        "count":       "7 tools",
         "tools": [
                 {
                     "title":       "Sticker Tool",
@@ -522,6 +522,31 @@ GROUPS = [
                             "All intermediate files (main.xlsx, transformed_data_N_names.xlsx, sticker.xlsx, pivoted_data_with_unique_id.xlsx) are kept in the output folder for inspection.",
                         ],
                         "output": "Desktop\\OUTPUT\\Excel_Transformer\\YYYY-MM-DD_HH-MM-SS\\",
+                    },
+                },
+                {
+                    "title":       "RBL Excel Transformer",
+                    "sample":      os.path.join(SAMPLES, "sample_rbl_excel_transformer.xlsx"),
+                    "description": "Transform RBL notice CSV/Excel (borrower + co-app addresses) → barcodes → pivot → split.",
+                    "icon":        "🏦",
+                    "accent":      C["blue"],
+                    "tag":         "Excel · RBL",
+                    "script":      os.path.join(SCRIPTS, "rbl_excel_transformer.py"),
+                    "docs": {
+                        "what": "RBL-format pipeline. Reads CSV/Excel with CUSTOMER NAME + ADDRESS (and Co-App Name / ADDRESS.1 …), unpivots each person into sticker rows, inserts barcodes, pivots back by Loan Account No, then splits by address count.",
+                        "when": "Use for RBL / TW UCL DLN style files that do not use name_1 / final_add_1 columns (those belong in the regular Excel Transformer).",
+                        "steps": [
+                            ("Select data file", "Browse a .csv / .xlsx RBL notice list (e.g. TW UCL DLN)."),
+                            ("Select barcode file", "Pick barcode.xlsx (first column). Or uncheck Insert barcodes."),
+                            ("Select columns", "Tick loan/notice fields to keep. Address/co-app columns are handled automatically."),
+                            ("Run Pipeline", "Outputs main.xlsx, sticker.xlsx, pivoted_data_with_unique_id.xlsx, and address_count_N.xlsx."),
+                        ],
+                        "tips": [
+                            "Group key is Loan Account No (written as ref_no for pivot).",
+                            "Primary address uses CUSTOMER NAME + ADDRESS; co-app uses Co-App Name + ADDRESS.1.",
+                            "Accepts CSV and Excel.",
+                        ],
+                        "output": "Desktop\\OUTPUT\\RBL_Excel_Transformer\\YYYY-MM-DD_HH-MM-SS\\",
                     },
                 },
                 {
