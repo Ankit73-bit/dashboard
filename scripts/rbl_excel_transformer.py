@@ -1,11 +1,12 @@
 """
 Tool: RBL Excel Transformer
-Pipeline for RBL-style notice lists (CSV/Excel):
-  borrower + co-applicant address columns → sticker rows → barcodes → pivot → split.
+Pipeline for RBL-style notice lists (CSV/Excel) prepared with numbered address slots:
+  name_1, address_1, name_2, address_2, …
 
-Unlike excel_transformer.py (name_1 / final_add_1 wide groups), this handles columns like:
-  CUSTOMER NAME, ADDRESS, State, City, pin, MOBILE_NO,
-  Co-App Name, ADDRESS.1, State.1, City.1, pin.1, MOBILE_NO.1, Address Count
+Flow: unpivot person slots → sticker rows → barcodes → pivot → split by address count.
+
+Optional extras per slot (same index): pin_1, mobile_1, state_1, city_1, sr_1, b_1, p_1
+(final_add_N is accepted as an alias for address_N).
 """
 
 import os
@@ -33,14 +34,13 @@ C = {
 }
 TINT = {"bg": "#001a2e", "mid": "#003050", "bdr": "#004878"}
 
-# Columns that belong to address-person slots (excluded from "base" selector)
-_PERSON_EXACT = {
-    "customer name", "co-app name", "co app name", "coapplicant name",
-    "address", "state", "city", "pin", "mobile_no", "mobile no", "mobile",
-    "address count", "address_count", "count",
-}
-_PERSON_SUFFIX_RE = re.compile(
-    r"^(co-app name|co app name|customer name|address|state|city|pin|mobile_no|mobile no|mobile)(\.\d+)?$",
+# Numbered person-slot columns: name_1, address_2, pin_3, …
+_SLOT_PREFIXES = (
+    "name", "address", "final_add", "state", "city", "pin",
+    "mobile", "mobile_no", "sr", "b", "p",
+)
+_SLOT_COL_RE = re.compile(
+    r"^(" + "|".join(_SLOT_PREFIXES) + r")_(\d+)$",
     re.I,
 )
 
@@ -117,13 +117,11 @@ def prefer_sheet(sheets, *candidates):
 
 
 def is_person_column(col):
+    """True for name_1 / address_2 / pin_3 … (excluded from base column checkboxes)."""
     c = _norm(col)
-    if c in _PERSON_EXACT:
+    if _SLOT_COL_RE.match(c):
         return True
-    if _PERSON_SUFFIX_RE.match(c):
-        return True
-    # ADDRESS.1 / pin.2 style after our normalize may stay as address.1
-    if re.match(r"^(address|state|city|pin|mobile_no|mobile|co-app name)(\.\d+)$", c):
+    if c in ("address count", "address_count", "count"):
         return True
     return False
 
@@ -142,66 +140,42 @@ def find_col(columns, *candidates):
     return None
 
 
+def detect_max_slot(columns):
+    """Highest N found in name_N / address_N / final_add_N."""
+    max_n = 0
+    for c in columns:
+        m = _SLOT_COL_RE.match(_norm(c))
+        if m and m.group(1).lower() in ("name", "address", "final_add"):
+            max_n = max(max_n, int(m.group(2)))
+    return max_n
+
+
 def detect_person_slots(columns):
     """
-    Build list of person field maps for borrower + co-apps.
-    Slot 0: customer name + address (+ state/city/pin/mobile)
-    Slot 1+: co-app name / address.N …
+    Build person slots from numbered columns:
+      name_1 + address_1 (+ pin_1 / mobile_1 / …)
+      name_2 + address_2 …
     """
     cols = list(columns)
+    lower = {_norm(c): c for c in cols}
+    max_n = detect_max_slot(cols)
     slots = []
 
-    # Primary borrower
-    name0 = find_col(cols, "customer name", "customer_name", "borrower name", "name")
-    addr0 = find_col(cols, "address")
-    # Prefer bare 'address' not address.1
-    if addr0 and re.search(r"\.\d+$", str(addr0)):
-        bare = [c for c in cols if _norm(c) == "address"]
-        addr0 = bare[0] if bare else addr0
-    slot0 = {
-        "name": name0,
-        "address": addr0,
-        "state": find_col(cols, "state"),
-        "city": find_col(cols, "city"),
-        "pin": find_col(cols, "pin", "pincode", "pin code"),
-        "mobile": find_col(cols, "mobile_no", "mobile no", "mobile", "phone"),
-    }
-    # Disambiguate state/city/pin/mobile without .N for slot 0
-    for key in ("state", "city", "pin", "mobile"):
-        col = slot0[key]
-        if col and re.search(r"\.\d+$", str(col)):
-            bare_name = _norm(col).split(".")[0]
-            bare = [c for c in cols if _norm(c) == bare_name]
-            if bare:
-                slot0[key] = bare[0]
-    slots.append(slot0)
-
-    # Co-app / ADDRESS.N slots
-    # Find max .N suffix on address / co-app name
-    max_n = 0
-    for c in cols:
-        m = re.match(r"^(?:address|co-app name|pin|state|city|mobile_no)\.(\d+)$", _norm(c))
-        if m:
-            max_n = max(max_n, int(m.group(1)))
-
-    # Also treat a single "co-app name" without suffix as slot 1 paired with address.1
-    has_coapp = find_col(cols, "co-app name", "co app name", "coapplicant name")
-    if has_coapp or max_n >= 1:
-        n_end = max(max_n, 1 if has_coapp else 0)
-        for n in range(1, n_end + 1):
-            suffix = f".{n}"
-            name_col = find_col(cols, f"co-app name{suffix}", f"co app name{suffix}")
-            if n == 1 and not name_col:
-                name_col = find_col(cols, "co-app name", "co app name", "coapplicant name")
-            slots.append({
-                "name": name_col,
-                "address": find_col(cols, f"address{suffix}"),
-                "state": find_col(cols, f"state{suffix}"),
-                "city": find_col(cols, f"city{suffix}"),
-                "pin": find_col(cols, f"pin{suffix}", f"pincode{suffix}"),
-                "mobile": find_col(cols, f"mobile_no{suffix}", f"mobile{suffix}"),
-            })
-
+    for n in range(1, max_n + 1):
+        name_col = lower.get(f"name_{n}")
+        addr_col = lower.get(f"address_{n}") or lower.get(f"final_add_{n}")
+        slots.append({
+            "index": n,
+            "name": name_col,
+            "address": addr_col,
+            "state": lower.get(f"state_{n}"),
+            "city": lower.get(f"city_{n}"),
+            "pin": lower.get(f"pin_{n}") or lower.get(f"p_{n}"),
+            "mobile": lower.get(f"mobile_{n}") or lower.get(f"mobile_no_{n}"),
+            "sr": lower.get(f"sr_{n}"),
+            "b": lower.get(f"b_{n}"),
+            "p": lower.get(f"p_{n}") or lower.get(f"pin_{n}"),
+        })
     return slots
 
 
@@ -252,8 +226,14 @@ def check_barcodes(data_file, barcode_file, log_fn, data_sheet=0, barcode_sheet=
 def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0):
     df = read_data_file(input_file, sheet_name=sheet_name)
     slots = detect_person_slots(df.columns)
-    log_fn(f"  Person slots detected → {len(slots)}")
+    log_fn(f"  Person slots detected → {len(slots)}  (name_1 / address_1 …)")
     log_fn(f"  Sheet → {sheet_name}")
+
+    if not slots:
+        raise ValueError(
+            "No numbered address columns found.\n\n"
+            "Prepare columns like: name_1, address_1, name_2, address_2, …"
+        )
 
     # Map selected cols (UI may show original-ish lower names) to df columns
     missing = [c for c in selected_cols if c not in df.columns]
@@ -279,11 +259,23 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
             if not name:
                 continue
             final_add = build_final_add(row, slot)
-            sr_val = _clean(row[sr_col]) if sr_col else ""
-            pin_val = _clean(row[slot["pin"]]) if slot.get("pin") else ""
+            # Prefer per-slot sr/b/p; fall back to row SR NO / pin
+            if slot.get("sr"):
+                sr_val = _clean(row[slot["sr"]])
+            else:
+                sr_val = _clean(row[sr_col]) if sr_col else ""
+            if slot.get("b"):
+                b_val = _clean(row[slot["b"]])
+            else:
+                b_val = ""
+            if slot.get("p"):
+                pin_val = _clean(row[slot["p"]])
+            elif slot.get("pin"):
+                pin_val = _clean(row[slot["pin"]])
+            else:
+                pin_val = ""
             base_vals = [_clean(row[c]) for c in selected_cols]
-            rec = [unique_id] + base_vals + [name, final_add, sr_val, "", pin_val]
-            # Ensure group key present in selected for pivot — also store ref_no alias
+            rec = [unique_id] + base_vals + [name, final_add, sr_val, b_val, pin_val]
             row_people.append(rec)
             transformed.append(rec)
             unique_id += 1
@@ -298,9 +290,6 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
     # Add ref_no helper for pivot (loan account / cust id)
     if group_key and group_key in consolidated.columns:
         consolidated["ref_no"] = consolidated[group_key]
-    elif group_key:
-        # group_key not selected — still add from transform? skip
-        pass
 
     main_path = os.path.join(out_dir, "main.xlsx")
     consolidated.to_excel(main_path, index=False)
@@ -317,7 +306,9 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
         log_fn(f"  ✅ {fname} → {len(part):,} rows")
 
     if not transformed:
-        raise ValueError("No address rows produced — check CUSTOMER NAME / Co-App columns.")
+        raise ValueError(
+            "No address rows produced — check that name_1 / name_2 … have values."
+        )
 
     return main_path, group_key, sr_col
 
@@ -468,7 +459,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["accent"],
         ).pack(anchor="w", padx=14, pady=8)
 
-        self._sec("Step 1 — Select RBL data file (CSV / Excel)")
+        self._sec("Step 1 — Select data file (name_1 / address_1 …)")
         fr1 = ctk.CTkFrame(self, fg_color="transparent")
         fr1.pack(fill="x", pady=(0, 4))
         self._data_lbl = ctk.CTkLabel(
@@ -556,7 +547,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._sec("Step 3 — Select columns to keep")
         ctk.CTkLabel(
             self,
-            text="Address / co-app fields are handled automatically. "
+            text="Numbered slots (name_1, address_1, name_2…) are handled automatically. "
                  "Tick the loan / notice columns to carry through.",
             font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
             anchor="w", wraplength=700, justify="left",
@@ -605,7 +596,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
             text_color=C["text"], height=30, width=60,
         ).pack(side="left", padx=(0, 8))
         self._grp_det_lbl = ctk.CTkLabel(
-            opt_row, text="(borrower + co-app)",
+            opt_row, text="(name_1 / address_1 …)",
             font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
         )
         self._grp_det_lbl.pack(side="left")
@@ -751,15 +742,22 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
 
         named = []
         for i, slot in enumerate(slots):
-            n = slot.get("name") or "(none)"
-            a = slot.get("address") or "(none)"
-            named.append(f"#{i + 1} name={n} / address={a}")
-        self._file_info.configure(
-            text=f"📊  Sheet '{sheet}' · {len(df):,} rows · "
-                 f"{self._detected_slots} address slot(s)\n"
-                 + "   " + "  |  ".join(named),
-            text_color=C["blue"],
-        )
+            n = slot.get("name") or "(missing name_N)"
+            a = slot.get("address") or "(missing address_N)"
+            named.append(f"#{slot.get('index', i + 1)} {n} / {a}")
+        if not slots:
+            self._file_info.configure(
+                text="⚠️  No name_1 / address_1 columns found. "
+                     "Rename person columns to name_1, address_1, name_2, address_2, …",
+                text_color=C["orange"],
+            )
+        else:
+            self._file_info.configure(
+                text=f"📊  Sheet '{sheet}' · {len(df):,} rows · "
+                     f"{self._detected_slots} slot(s) (name_N / address_N)\n"
+                     + "   " + "  |  ".join(named),
+                text_color=C["blue"],
+            )
         self._max_grp_var.set(str(max(2, self._detected_slots)))
         self._grp_det_lbl.configure(
             text=f"(detected {self._detected_slots} slot(s))",
@@ -915,7 +913,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
                 )
                 self._log("")
 
-            self._log("🔄 Step 1 — Transform RBL data (borrower + co-app → sticker rows)…")
+            self._log("🔄 Step 1 — Transform numbered slots (name_1 / address_1 …) → sticker rows…")
             transform_rbl_data(
                 self._data_file, out_dir, selected_cols, self._log,
                 sheet_name=data_sheet,
@@ -996,7 +994,7 @@ class App(ctk.CTk):
         ).pack(anchor="w")
         ctk.CTkLabel(
             tx,
-            text="RBL notice CSV/Excel → Transform · Barcode · Pivot · Split",
+            text="RBL Excel with name_1 / address_1 … → Transform · Barcode · Pivot · Split",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"],
         ).pack(anchor="w")
 
