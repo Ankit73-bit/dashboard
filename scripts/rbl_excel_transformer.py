@@ -37,14 +37,22 @@ TINT = {"bg": "#001a2e", "mid": "#003050", "bdr": "#004878"}
 # Numbered person-slot columns: name_1, address_2, pin_3, …
 _SLOT_PREFIXES = (
     "name", "address", "final_add", "state", "city", "pin",
-    "mobile", "mobile_no", "sr", "b", "p",
+    "mobile", "mobile_no", "sr", "b", "p", "count", "details", "barcode",
 )
 _SLOT_COL_RE = re.compile(
     r"^(" + "|".join(_SLOT_PREFIXES) + r")_(\d+)$",
     re.I,
 )
 
-GROUP_COLS = ["name", "final_add", "sr", "b", "p"]
+# Long-form sticker columns (order matches sample pivoted layout intent)
+GROUP_COLS = [
+    "details", "name", "final_add", "state", "city", "mobile",
+    "sr", "barcode", "b", "p", "count",
+]
+
+BARCODE_TYPST = (
+    '#text(font: "IDAHC39M Code 39 Barcode", size: 8.5pt, [({code})])'
+)
 
 
 def get_output_dir():
@@ -59,11 +67,26 @@ def _norm(c):
 
 
 def _clean(v):
-    if v is None or (isinstance(v, float) and pd.isna(v)):
+    if v is None:
         return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    # Excel/pandas often load mobiles (and similar IDs) as float → strip trailing .0
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        if isinstance(v, float) and not v.is_integer():
+            return str(v).strip()
+        try:
+            return str(int(v))
+        except (ValueError, OverflowError):
+            return str(v).strip()
     s = str(v).strip()
     if not s or s.lower() in ("nan", "none", "nat"):
         return ""
+    if s.endswith(".0") and s[:-2].lstrip("-").isdigit():
+        return s[:-2]
     return s
 
 
@@ -175,6 +198,9 @@ def detect_person_slots(columns):
             "sr": lower.get(f"sr_{n}"),
             "b": lower.get(f"b_{n}"),
             "p": lower.get(f"p_{n}") or lower.get(f"pin_{n}"),
+            "count": lower.get(f"count_{n}"),
+            "details": lower.get(f"details_{n}"),
+            "barcode": lower.get(f"barcode_{n}"),
         })
     return slots
 
@@ -191,6 +217,30 @@ def build_final_add(row, slot):
             if v:
                 parts.append(v)
     return ", ".join(parts)
+
+
+def build_details(name, final_add, state, city, mobile, pin=""):
+    """
+    Match sample_output-style details:
+      NAME \\ ADDRESS \\ CITY - STATE - PIN \\ Mobile - MOBILE
+    (single backslash separators)
+    """
+    location = " - ".join(p for p in (city or "", state or "", pin or "") if p)
+    parts = [
+        name or "",
+        final_add or "",
+        location,
+        f"Mobile - {mobile}" if mobile else "Mobile - ",
+    ]
+    return " \\ ".join(parts)
+
+
+def build_barcode_typst(code):
+    """Typst barcode expression used in sample_output barcode_N column."""
+    code = _clean(code)
+    if not code:
+        return ""
+    return BARCODE_TYPST.format(code=code)
 
 
 def count_needed_barcodes(df, slots):
@@ -244,7 +294,7 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
         df.columns,
         "loan account no", "loan_account_no", "loan no", "ref_no", "cust id", "cust_id",
     )
-    sr_col = find_col(df.columns, "sr no", "srno", "sr_no", "s.no", "s no")
+    sr_col = find_col(df.columns, "sr no", "srno", "sr_no", "s.no", "s no", "SrNo")
 
     transformed = []
     grouped = {}
@@ -259,6 +309,10 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
             if not name:
                 continue
             final_add = build_final_add(row, slot)
+            state_val = _clean(row[slot["state"]]) if slot.get("state") else ""
+            city_val = _clean(row[slot["city"]]) if slot.get("city") else ""
+            mobile_val = _clean(row[slot["mobile"]]) if slot.get("mobile") else ""
+            count_val = _clean(row[slot["count"]]) if slot.get("count") else ""
             # Prefer per-slot sr/b/p; fall back to row SR NO / pin
             if slot.get("sr"):
                 sr_val = _clean(row[slot["sr"]])
@@ -274,8 +328,28 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
                 pin_val = _clean(row[slot["pin"]])
             else:
                 pin_val = ""
+
+            # details_ / barcode_ — generated (or pass through if already in input)
+            if slot.get("details") and _clean(row[slot["details"]]):
+                details_val = _clean(row[slot["details"]])
+            else:
+                details_val = build_details(
+                    name, final_add, state_val, city_val, mobile_val, pin_val,
+                )
+            if slot.get("barcode") and _clean(row[slot["barcode"]]):
+                barcode_val = _clean(row[slot["barcode"]])
+            else:
+                barcode_val = build_barcode_typst(b_val)
+
             base_vals = [_clean(row[c]) for c in selected_cols]
-            rec = [unique_id] + base_vals + [name, final_add, sr_val, b_val, pin_val]
+            rec = (
+                [unique_id]
+                + base_vals
+                + [
+                    details_val, name, final_add, state_val, city_val, mobile_val,
+                    sr_val, barcode_val, b_val, pin_val, count_val,
+                ]
+            )
             row_people.append(rec)
             transformed.append(rec)
             unique_id += 1
@@ -334,17 +408,33 @@ def merge_split_files(out_dir, log_fn):
 def insert_barcodes(sticker_path, barcode_file, log_fn, barcode_sheet=0):
     sticker_df = pd.read_excel(sticker_path)
     barcode_df = pd.read_excel(barcode_file, sheet_name=barcode_sheet, usecols=[0])
-    barcode_df = barcode_df.rename(columns={barcode_df.columns[0]: "barcode"})
+    barcode_df = barcode_df.rename(columns={barcode_df.columns[0]: "barcode_raw"})
 
     if len(barcode_df) < len(sticker_df):
         raise ValueError(
             f"Not enough barcodes — have {len(barcode_df):,}, need {len(sticker_df):,}."
         )
 
-    # Prefer column 'b'; create if missing
-    sticker_df["b"] = barcode_df["barcode"].values[: len(sticker_df)]
+    codes = [_clean(v) for v in barcode_df["barcode_raw"].tolist()]
+    # Raw barcode value in column b
+    sticker_df["b"] = codes[: len(sticker_df)]
+    # Typst expression in column barcode (matches sample_output barcode_N)
+    sticker_df["barcode"] = [build_barcode_typst(c) for c in sticker_df["b"].tolist()]
+    # Refresh details in case address fields changed (usually already set)
+    if "details" in sticker_df.columns:
+        sticker_df["details"] = [
+            build_details(
+                _clean(r.get("name", "")),
+                _clean(r.get("final_add", "")),
+                _clean(r.get("state", "")),
+                _clean(r.get("city", "")),
+                _clean(r.get("mobile", "")),
+                _clean(r.get("p", "")),
+            )
+            for _, r in sticker_df.iterrows()
+        ]
     sticker_df.to_excel(sticker_path, index=False)
-    log_fn(f"  ✅ Barcodes inserted ({len(sticker_df):,} rows)")
+    log_fn(f"  ✅ Barcodes inserted ({len(sticker_df):,} rows) — b + barcode Typst")
 
 
 def pivot_and_sort(sticker_path, out_dir, selected_cols, first_col, max_groups, log_fn):
@@ -372,19 +462,31 @@ def pivot_and_sort(sticker_path, out_dir, selected_cols, first_col, max_groups, 
         row_dict = {col: group[col].iloc[0] for col in fixed_header if col in group.columns}
         for i, row in enumerate(group.itertuples(index=False), start=1):
             row_dict.update({
-                f"name_{i}": getattr(row, "name", None),
-                f"final_add_{i}": getattr(row, "final_add", None),
-                f"sr_{i}": getattr(row, "sr", None),
-                f"b_{i}": getattr(row, "b", None),
-                f"p_{i}": getattr(row, "p", None),
+                f"details_{i}": _clean(getattr(row, "details", None)) or None,
+                f"name_{i}": _clean(getattr(row, "name", None)) or None,
+                f"final_add_{i}": _clean(getattr(row, "final_add", None)) or None,
+                f"state_{i}": _clean(getattr(row, "state", None)) or None,
+                f"city_{i}": _clean(getattr(row, "city", None)) or None,
+                f"mobile_{i}": _clean(getattr(row, "mobile", None)) or None,
+                f"sr_{i}": _clean(getattr(row, "sr", None)) or None,
+                f"barcode_{i}": _clean(getattr(row, "barcode", None)) or None,
+                f"b_{i}": _clean(getattr(row, "b", None)) or None,
+                f"p_{i}": _clean(getattr(row, "p", None)) or None,
+                f"count_{i}": _clean(getattr(row, "count", None)) or None,
             })
         for i in range(len(group) + 1, max_groups + 1):
             row_dict.update({
+                f"details_{i}": None,
                 f"name_{i}": None,
                 f"final_add_{i}": None,
+                f"state_{i}": None,
+                f"city_{i}": None,
+                f"mobile_{i}": None,
                 f"sr_{i}": None,
+                f"barcode_{i}": None,
                 f"b_{i}": None,
                 f"p_{i}": None,
+                f"count_{i}": None,
             })
         pivoted_data.append(row_dict)
 
