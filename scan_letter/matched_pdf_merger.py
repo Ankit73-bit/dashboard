@@ -1,24 +1,41 @@
 """
 Tool: Matched PDF Merger (Scan Step 3)
 Merge Exact/Fuzzy-matched barcode PDFs from multiple source folders.
+
+Performance notes (14k+ rows):
+  - Index each source folder once (O(files) walk) instead of walking per barcode
+  - Parallel merges via ThreadPoolExecutor
+  - Throttled UI logging
 """
 
 import os
 import csv
 import threading
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
-from PyPDF2 import PdfMerger
+
+try:
+    from pypdf import PdfWriter, PdfReader
+except ImportError:
+    from PyPDF2 import PdfMerger as _PdfMerger
+
+    PdfWriter = None
+    PdfReader = None
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-DESKTOP  = os.path.join(os.path.expanduser("~"), "Desktop")
+DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 BASE_OUT = os.path.join(DESKTOP, "OUTPUT", "Scan_PDF_Merger")
+
+# Parallel merge workers (I/O bound; keep moderate on Windows)
+DEFAULT_WORKERS = min(8, max(4, (os.cpu_count() or 4)))
+LOG_EVERY = 100  # UI log every N successful merges
 
 C = {
     "bg": "#0a0a0f", "card": "#16161f", "hover": "#1e1e2e",
@@ -42,15 +59,53 @@ def get_output_dir():
     return path
 
 
-def find_pdf_in_subfolders(root_folder, barcode):
+def build_pdf_index(root_folder, log_fn=None):
+    """
+    Walk root once and map barcode stem (lowercase, no .pdf) → full path.
+    If the same barcode appears in multiple subfolders, first hit wins.
+    """
+    index = {}
     if not root_folder or not os.path.exists(root_folder):
-        return None
-    target = f"{barcode}.pdf".lower()
+        return index
+    count = 0
     for root, _, files in os.walk(root_folder):
         for f in files:
-            if f.lower() == target:
-                return os.path.join(root, f)
-    return None
+            if not f.lower().endswith(".pdf"):
+                continue
+            stem = os.path.splitext(f)[0].strip().lower()
+            if not stem or stem in index:
+                continue
+            index[stem] = os.path.join(root, f)
+            count += 1
+    if log_fn:
+        log_fn(f"  Indexed {count:,} PDF(s) under {root_folder}")
+    return index
+
+
+def _merge_pdf_files(pdf_paths, out_path):
+    """Merge PDFs to out_path. Prefer pypdf PdfWriter; fall back to PyPDF2."""
+    if PdfWriter is not None:
+        writer = PdfWriter()
+        try:
+            for pdf in pdf_paths:
+                reader = PdfReader(pdf, strict=False)
+                writer.append(reader)
+            with open(out_path, "wb") as fh:
+                writer.write(fh)
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+        return
+
+    merger = _PdfMerger()
+    try:
+        for pdf in pdf_paths:
+            merger.append(pdf)
+        merger.write(out_path)
+    finally:
+        merger.close()
 
 
 def _find_col(columns, *candidates):
@@ -67,7 +122,48 @@ def _find_col(columns, *candidates):
     return None
 
 
-def merge_pdfs(excel_folder, selected_sources, col_map, out_dir, log_fn, progress_fn):
+def _merge_one_job(job):
+    """
+    job: dict with barcode, prospect_no, remark, pdf_paths, out_path, folder_names
+    Returns (status, row_for_csv, log_msg_or_None)
+    status: 'merged' | 'skipped' | 'error'
+    """
+    prospect_no = job["prospect_no"]
+    barcode = job["barcode"]
+    remark = job["remark"]
+    folder_names = job["folder_names"]
+    merged_filename = job["merged_filename"]
+    missing = job["missing"]
+
+    if missing:
+        return (
+            "skipped",
+            [prospect_no, barcode, remark, folder_names, "",
+             "Skipped", f"Missing: {', '.join(missing)}"],
+            None,
+        )
+
+    try:
+        _merge_pdf_files(job["pdf_paths"], job["out_path"])
+        return (
+            "merged",
+            [prospect_no, barcode, remark, folder_names,
+             job["out_path"], "Merged", "OK"],
+            None,
+        )
+    except Exception as e:
+        return (
+            "error",
+            [prospect_no, barcode, remark, folder_names, "",
+             "Row Error", str(e)],
+            f"  Error {merged_filename}: {e}",
+        )
+
+
+def merge_pdfs(
+    excel_folder, selected_sources, col_map, out_dir, log_fn, progress_fn,
+    workers=DEFAULT_WORKERS,
+):
     """
     selected_sources: list of (display_name, folder_path)
     col_map: {barcode, prospect_no, remark}
@@ -79,7 +175,7 @@ def merge_pdfs(excel_folder, selected_sources, col_map, out_dir, log_fn, progres
     with open(log_file, "w", newline="", encoding="utf-8") as f:
         csv.writer(f).writerow([
             "Prospect_No", "Barcode", "Remark", "Merged_Folders",
-            "Merged_File", "Status", "Error"
+            "Merged_File", "Status", "Error",
         ])
 
     excel_files = [
@@ -89,8 +185,16 @@ def merge_pdfs(excel_folder, selected_sources, col_map, out_dir, log_fn, progres
     if not excel_files:
         raise ValueError("No Excel files found in the selected folder.")
 
-    total_matched = merged_count = skipped = errors = 0
+    # ── One-time index per source (the big speedup) ──────────────────────────
+    log_fn("Building PDF indexes (one walk per source folder)…")
+    indexes = []  # list of (name, index_dict)
+    for name, folder in selected_sources:
+        log_fn(f"Indexing {name}…")
+        indexes.append((name, build_pdf_index(folder, log_fn)))
     folder_names = ", ".join(n for n, _ in selected_sources)
+
+    total_matched = merged_count = skipped = errors = 0
+    jobs = []
 
     for ei, ef in enumerate(excel_files, 1):
         log_fn(f"\nExcel: {ef}")
@@ -124,61 +228,99 @@ def merge_pdfs(excel_folder, selected_sources, col_map, out_dir, log_fn, progres
             df[remark_col].str.contains("Exact Match", case=False, na=False)
             | df[remark_col].str.contains("Fuzzy Match", case=False, na=False)
         ].copy()
-        log_fn(f"  Matched rows: {len(matched_df)}")
+        log_fn(f"  Matched rows: {len(matched_df):,}")
         total_matched += len(matched_df)
 
-        with open(log_file, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            for _, row in matched_df.iterrows():
-                barcode = str(row[barcode_col]).strip()
-                prospect_no = str(row[prospect_col]).strip()
-                remark = str(row[remark_col]).strip()
+        # Build jobs with O(1) index lookups (no per-row folder walks)
+        records = matched_df[
+            [barcode_col, prospect_col, remark_col]
+        ].itertuples(index=False, name=None)
 
-                if not barcode or not prospect_no or barcode.lower() == "nan":
-                    skipped += 1
-                    continue
+        for barcode_raw, prospect_raw, remark_raw in records:
+            barcode = str(barcode_raw).strip() if barcode_raw is not None else ""
+            prospect_no = str(prospect_raw).strip() if prospect_raw is not None else ""
+            remark = str(remark_raw).strip() if remark_raw is not None else ""
 
-                found_pdfs = []
-                missing = []
-                for name, folder in selected_sources:
-                    pdf_path = find_pdf_in_subfolders(folder, barcode)
-                    if pdf_path:
-                        found_pdfs.append(pdf_path)
-                    else:
-                        missing.append(name)
+            if not barcode or not prospect_no or barcode.lower() == "nan":
+                skipped += 1
+                continue
 
-                merged_filename = f"{prospect_no}-{barcode}.pdf"
-                if missing:
-                    skipped += 1
-                    writer.writerow([
-                        prospect_no, barcode, remark, folder_names, "",
-                        "Skipped", f"Missing: {', '.join(missing)}"
-                    ])
-                    log_fn(f"  Skip {merged_filename} (missing {', '.join(missing)})")
-                    continue
+            key = barcode.lower()
+            found_pdfs = []
+            missing = []
+            for name, index in indexes:
+                pdf_path = index.get(key)
+                if pdf_path:
+                    found_pdfs.append(pdf_path)
+                else:
+                    missing.append(name)
 
-                try:
-                    out_path = os.path.join(merged_folder, merged_filename)
-                    merger = PdfMerger()
-                    for pdf in found_pdfs:
-                        merger.append(pdf)
-                    merger.write(out_path)
-                    merger.close()
+            merged_filename = f"{prospect_no}-{barcode}.pdf"
+            jobs.append({
+                "barcode": barcode,
+                "prospect_no": prospect_no,
+                "remark": remark,
+                "pdf_paths": found_pdfs,
+                "missing": missing,
+                "out_path": os.path.join(merged_folder, merged_filename),
+                "merged_filename": merged_filename,
+                "folder_names": folder_names,
+            })
+
+        progress_fn(0.05 + 0.15 * (ei / len(excel_files)))
+
+    n_jobs = len(jobs)
+    log_fn(f"\nMerging {n_jobs:,} job(s) with {workers} workers…")
+
+    log_rows = []
+    done = 0
+
+    # Process skips cheaply inline; only send real merges to the pool
+    merge_jobs = []
+    for job in jobs:
+        if job["missing"]:
+            status, csv_row, log_msg = _merge_one_job(job)
+            skipped += 1
+            log_rows.append(csv_row)
+            done += 1
+        else:
+            merge_jobs.append(job)
+
+    if merge_jobs:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_merge_one_job, j): j for j in merge_jobs}
+            for fut in as_completed(futures):
+                status, csv_row, log_msg = fut.result()
+                log_rows.append(csv_row)
+                done += 1
+                if status == "merged":
                     merged_count += 1
-                    writer.writerow([
-                        prospect_no, barcode, remark, folder_names,
-                        out_path, "Merged", "OK"
-                    ])
-                    log_fn(f"  Merged → {merged_filename}")
-                except Exception as e:
+                    if merged_count % LOG_EVERY == 0 or merged_count == 1:
+                        log_fn(
+                            f"  Merged {merged_count:,} / {len(merge_jobs):,}…"
+                        )
+                elif status == "error":
                     errors += 1
-                    writer.writerow([
-                        prospect_no, barcode, remark, folder_names,
-                        "", "Row Error", str(e)
-                    ])
-                    log_fn(f"  Error {merged_filename}: {e}")
+                    if log_msg:
+                        log_fn(log_msg)
+                else:
+                    skipped += 1
 
-        progress_fn(ei / len(excel_files))
+                if done % 50 == 0 or done == n_jobs:
+                    progress_fn(0.2 + 0.8 * (done / max(n_jobs, 1)))
+
+                # Flush CSV periodically so progress isn't lost on crash
+                if len(log_rows) >= 500:
+                    with open(log_file, "a", newline="", encoding="utf-8") as f:
+                        csv.writer(f).writerows(log_rows)
+                    log_rows.clear()
+
+    if log_rows:
+        with open(log_file, "a", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(log_rows)
+
+    progress_fn(1.0)
+    log_fn(f"  Done merging — {merged_count:,} written.")
 
     return {
         "matched": total_matched,
@@ -194,13 +336,14 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Matched PDF Merger")
-        self.geometry("780x780")
+        self.geometry("780x820")
         self.minsize(700, 640)
         self.configure(fg_color=C["bg"])
         self._excel_folder = None
         self._source_paths = {k: None for k, _ in SOURCES}
         self._source_vars = {}
         self._columns = []
+        self._workers_var = ctk.StringVar(value=str(DEFAULT_WORKERS))
         self._build()
 
     def _build(self):
@@ -306,6 +449,17 @@ class App(ctk.CTk):
             cb.grid(row=i, column=1, padx=16, pady=8, sticky="ew")
             self._combos[role] = cb
 
+        self._sec(body, "Speed")
+        speed = ctk.CTkFrame(body, fg_color="transparent")
+        speed.pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(speed, text="Parallel workers:",
+                     font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"]).pack(side="left")
+        ctk.CTkEntry(speed, textvariable=self._workers_var, width=60, height=30,
+                     fg_color=C["card"], border_color=C["border"],
+                     text_color=C["text"]).pack(side="left", padx=(8, 8))
+        ctk.CTkLabel(speed, text=f"(default {DEFAULT_WORKERS}; try 8–16 for large runs)",
+                     font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"]).pack(side="left")
+
         self._sec(body, "Log")
         self._log = ctk.CTkTextbox(body, height=160, font=ctk.CTkFont("Courier New", 11),
                                    fg_color=C["card"], border_color=C["border"],
@@ -381,16 +535,24 @@ class App(ctk.CTk):
             messagebox.showwarning("Columns", "Set Barcode, Prospect No, and Remark columns.")
             return
 
+        try:
+            workers = int(self._workers_var.get().strip())
+            if workers < 1 or workers > 32:
+                raise ValueError()
+        except ValueError:
+            messagebox.showwarning("Workers", "Parallel workers must be an integer 1–32.")
+            return
+
         self._run_btn.configure(state="disabled", text="Processing…")
         self._prog.set(0)
         self._log.configure(state="normal")
         self._log.delete("1.0", "end")
         self._log.configure(state="disabled")
         threading.Thread(
-            target=self._run, args=(selected, col_map), daemon=True
+            target=self._run, args=(selected, col_map, workers), daemon=True
         ).start()
 
-    def _run(self, selected, col_map):
+    def _run(self, selected, col_map, workers):
         out_dir = get_output_dir()
 
         def log(m):
@@ -403,9 +565,11 @@ class App(ctk.CTk):
             log(f"Excel   → {self._excel_folder}")
             for name, path in selected:
                 log(f"Source  → {name}: {path}")
+            log(f"Workers → {workers}")
             log(f"Output  → {out_dir}\n")
             stats = merge_pdfs(
-                self._excel_folder, selected, col_map, out_dir, log, prog
+                self._excel_folder, selected, col_map, out_dir, log, prog,
+                workers=workers,
             )
             log("\n========== SUMMARY ==========")
             log(f"Matched rows : {stats['matched']}")
