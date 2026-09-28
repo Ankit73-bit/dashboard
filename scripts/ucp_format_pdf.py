@@ -733,6 +733,78 @@ def write_batch_workbook(excel_path, sheet_specs):
     wb.close()
 
 
+def _clear_excel_gen_py_cache():
+    """
+    Remove corrupt win32com gen_py Excel wrappers.
+    Fixes: AttributeError: ... has no attribute 'CLSIDToClassMap'
+    """
+    import shutil
+    try:
+        from win32com.client import gencache
+        cache_dir = gencache.GetGeneratePath()
+    except Exception:
+        return
+    if not cache_dir or not os.path.isdir(cache_dir):
+        return
+    for name in os.listdir(cache_dir):
+        # Excel typelib folders look like 00020813-0000-0000-C000-000000000046x0x1x9
+        if "00020813" in name.lower():
+            path = os.path.join(cache_dir, name)
+            try:
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
+            except Exception:
+                pass
+    try:
+        import sys
+        to_del = [
+            k for k in list(sys.modules)
+            if "00020813" in k or k.startswith("win32com.gen_py")
+        ]
+        for k in to_del:
+            sys.modules.pop(k, None)
+    except Exception:
+        pass
+
+
+def get_excel_application(log_fn=None):
+    """
+    Start Excel via COM using late binding (DispatchEx).
+
+    Avoids win32com gencache / gen_py entirely — that cache often corrupts and
+    raises: AttributeError: ... has no attribute 'CLSIDToClassMap'
+    (Excel typelib IID 00020813-...).
+    """
+    import win32com.client as win32
+
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    # Clear any broken Excel gen_py leftovers so other tools don't trip on them
+    _clear_excel_gen_py_cache()
+
+    last_err = None
+    for factory_name, factory in (
+        ("DispatchEx", win32.DispatchEx),
+        ("Dispatch", win32.Dispatch),
+    ):
+        try:
+            excel = factory("Excel.Application")
+            _log(f"  Excel COM started via {factory_name}")
+            return excel
+        except Exception as e:
+            last_err = e
+            _log(f"  Excel COM {factory_name} failed: {e}")
+
+    raise RuntimeError(
+        "Could not start Excel via COM. Is Microsoft Excel installed?\n"
+        f"Last error: {last_err}"
+    ) from last_err
+
+
 def excel_book_to_pdf(excel_app, excel_path, pdf_path):
     """
     Open one multi-sheet workbook once, export all sheets to a single PDF,
@@ -888,13 +960,13 @@ def run_pipeline(
     log_fn(f"Header   → {header_template}\n")
 
     try:
-        import win32com.client as win32
+        import win32com.client  # noqa: F401 — presence check
     except ImportError as e:
         raise RuntimeError(
             "pywin32 is required for Excel→PDF export. pip install pywin32"
         ) from e
 
-    excel = win32.gencache.EnsureDispatch("Excel.Application")
+    excel = get_excel_application(log_fn)
     excel.Visible = False
     excel.DisplayAlerts = False
     try:

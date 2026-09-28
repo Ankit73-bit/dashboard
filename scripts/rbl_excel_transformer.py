@@ -3,7 +3,9 @@ Tool: RBL Excel Transformer
 Pipeline for RBL-style notice lists (CSV/Excel) prepared with numbered address slots:
   name_1, address_1, name_2, address_2, …
 
-Flow: unpivot person slots → sticker rows → barcodes → pivot → split by address count.
+Flow:
+  [optional] link-loan expand (groupby CUST_ID, suffix only selected cols)
+  → unpivot person slots → sticker rows → barcodes → pivot → split by address count.
 
 Optional extras per slot (same index): pin_1, mobile_1, state_1, city_1, sr_1, b_1, p_1
 (final_add_N is accepted as an alias for address_N).
@@ -53,6 +55,19 @@ GROUP_COLS = [
 BARCODE_TYPST = (
     '#text(font: "IDAHC39M Code 39 Barcode", size: 8.5pt, [({code})])'
 )
+
+# Columns typically unique per linked loan (pre-ticked when Link-loan option is on)
+_LINK_EXPAND_DEFAULTS = {
+    "loan_account_no", "loan account no", "dln", "notice_amt", "sanction_amt",
+    "product_code", "product_type", "veh reg no", "veh_reg_no", "amt_date",
+    "amt_type", "notice_type", "notice_date", "srno", "sr no", "sanction_date",
+    "count_1", "count_2",
+}
+
+# Amount-like columns pre-ticked for per-customer sum_* when link loans are on
+_LINK_SUM_DEFAULTS = {
+    "notice_amt", "sanction_amt",
+}
 
 
 def get_output_dir():
@@ -227,8 +242,8 @@ def build_details(name, final_add, state, city, mobile, pin=""):
     """
     location = " - ".join(p for p in (city or "", state or "", pin or "") if p)
     parts = [
-        name or "",
-        final_add or "",
+        f"Name: {name}" if name else "",
+        f"Address: {final_add}" if final_add else "",
         location,
         f"Mobile - {mobile}" if mobile else "Mobile - ",
     ]
@@ -243,21 +258,180 @@ def build_barcode_typst(code):
     return BARCODE_TYPST.format(code=code)
 
 
-def count_needed_barcodes(df, slots):
+def detect_link_loan_hint(df):
+    """Return (row_count_with_link_in_dln, dln_col_name_or_None)."""
+    dln = find_col(df.columns, "dln")
+    if not dln:
+        return 0, None
+    n = int(df[dln].astype(str).str.contains("link", case=False, na=False).sum())
+    return n, dln
+
+
+def _default_expand_col(col):
+    c = _norm(col)
+    if c in _LINK_EXPAND_DEFAULTS:
+        return True
+    # amt_date.1 etc. from duplicate headers
+    base = c.split(".")[0]
+    return base in _LINK_EXPAND_DEFAULTS
+
+
+def _default_sum_col(col):
+    c = _norm(col)
+    base = c.split(".")[0]
+    return base in _LINK_SUM_DEFAULTS or c in _LINK_SUM_DEFAULTS
+
+
+def expand_link_loans(df, groupby_col, expand_cols, log_fn, sum_cols=None):
+    """
+    Collapse multiple rows per groupby_col into one wide row (like separate_main),
+    but only suffix expand_cols with _1, _2, … — other columns keep the first
+    non-empty value. Optional sum_cols get a sum_{col} total per group.
+    Returns (expanded_df, max_links).
+    """
+    if groupby_col not in df.columns:
+        raise ValueError(f"Group-by column '{groupby_col}' not found.")
+    expand_cols = [c for c in expand_cols if c in df.columns and c != groupby_col]
+    if not expand_cols:
+        raise ValueError("Select at least one column to expand with _1, _2, …")
+    sum_cols = [c for c in (sum_cols or []) if c in df.columns and c != groupby_col]
+
+    other_cols = [c for c in df.columns if c != groupby_col and c not in expand_cols]
+    sizes = df.groupby(groupby_col, sort=False).size()
+    max_n = int(sizes.max())
+    multi = int((sizes > 1).sum())
+
+    sums_map = {}
+    if sum_cols:
+        work = df[[groupby_col] + sum_cols].copy()
+        for c in sum_cols:
+            work[c] = pd.to_numeric(work[c], errors="coerce")
+        agg = work.groupby(groupby_col, sort=False)[sum_cols].sum(min_count=1)
+        sums_map = {k: v for k, v in agg.to_dict(orient="index").items()}
+
+    rows_out = []
+    for key, group in df.groupby(groupby_col, sort=False):
+        group = group.reset_index(drop=True)
+        out = {groupby_col: key}
+        for c in other_cols:
+            raw = None
+            for v in group[c].tolist():
+                if _clean(v):
+                    raw = v
+                    break
+            if raw is None and len(group):
+                raw = group[c].iloc[0]
+            out[c] = raw
+        for i in range(len(group)):
+            suffix = i + 1
+            for c in expand_cols:
+                out[f"{c}_{suffix}"] = group.at[i, c]
+        for i in range(len(group) + 1, max_n + 1):
+            for c in expand_cols:
+                out[f"{c}_{i}"] = None
+        if sum_cols:
+            totals = sums_map.get(key, {})
+            for c in sum_cols:
+                val = totals.get(c)
+                if val is None or (isinstance(val, float) and pd.isna(val)):
+                    out[f"sum_{c}"] = None
+                else:
+                    # keep int when whole number
+                    try:
+                        fv = float(val)
+                        out[f"sum_{c}"] = int(fv) if fv.is_integer() else fv
+                    except (TypeError, ValueError):
+                        out[f"sum_{c}"] = val
+        rows_out.append(out)
+
+    result = pd.DataFrame(rows_out)
+    ordered = [groupby_col] + other_cols
+    for c in expand_cols:
+        for i in range(1, max_n + 1):
+            ordered.append(f"{c}_{i}")
+    for c in sum_cols:
+        ordered.append(f"sum_{c}")
+    result = result.reindex(columns=[c for c in ordered if c in result.columns])
+
+    # Avoid Excel float display like 119423.0 for whole-number sums
+    for c in sum_cols:
+        sc = f"sum_{c}"
+        if sc not in result.columns:
+            continue
+        cleaned = []
+        for v in result[sc].tolist():
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                cleaned.append(None)
+            else:
+                try:
+                    fv = float(v)
+                    cleaned.append(int(fv) if fv.is_integer() else fv)
+                except (TypeError, ValueError):
+                    cleaned.append(v)
+        result[sc] = cleaned
+
+    log_fn(f"  Link-loan expand: {len(df):,} rows -> {len(result):,} rows")
+    log_fn(
+        f"  Group-by: {groupby_col}  |  customers with >1 loan: {multi:,}  "
+        f"|  max links: {max_n}"
+    )
+    log_fn(f"  Expanded cols (_1.._{max_n}): {', '.join(expand_cols)}")
+    if sum_cols:
+        log_fn(f"  Sum cols (sum_*): {', '.join(sum_cols)}")
+    return result, max_n
+
+
+def remap_selected_after_expand(selected_cols, expand_cols, max_n, sum_cols=None):
+    """Map kept columns: expanded ones become col_1 … col_N; append sum_* cols."""
+    expand_set = set(expand_cols)
+    out = []
+    for c in selected_cols:
+        if c in expand_set:
+            for i in range(1, max_n + 1):
+                out.append(f"{c}_{i}")
+        else:
+            out.append(c)
+    for c in (sum_cols or []):
+        sc = f"sum_{c}"
+        if sc not in out:
+            out.append(sc)
+    return out
+
+
+def count_needed_barcodes(df, slots, only_indices=None):
+    """
+    Count address rows that need a barcode.
+    only_indices: optional set/list of slot indexes to include (e.g. {1} for
+    link-loan mode where only name_1 / address_1 get barcodes).
+    """
     needed = 0
     for _, row in df.iterrows():
         for slot in slots:
             if not slot.get("name"):
+                continue
+            if only_indices is not None and slot.get("index") not in only_indices:
                 continue
             if _clean(row[slot["name"]]):
                 needed += 1
     return needed
 
 
-def check_barcodes(data_file, barcode_file, log_fn, data_sheet=0, barcode_sheet=0):
+def check_barcodes(
+    data_file, barcode_file, log_fn, data_sheet=0, barcode_sheet=0,
+    barcode_only_first_slot=False, link_groupby=None,
+):
     df = read_data_file(data_file, sheet_name=data_sheet)
+    # When link-loan expand already applied OR we pass groupby on raw data,
+    # count one customer row for barcode planning.
+    if link_groupby and link_groupby in df.columns:
+        df = df.groupby(link_groupby, sort=False).first().reset_index()
+        log_fn(f"  🔍 Link-loan barcode count uses group-by '{link_groupby}' (1 row / customer)")
+
     slots = detect_person_slots(df.columns)
-    needed = count_needed_barcodes(df, slots)
+    only = {1} if barcode_only_first_slot else None
+    if barcode_only_first_slot:
+        log_fn("  🔍 Link-loan mode: barcodes only for slot _1 (name_1 / address_1)")
+    needed = count_needed_barcodes(df, slots, only_indices=only)
 
     barcode_df = pd.read_excel(barcode_file, sheet_name=barcode_sheet, usecols=[0])
     available = len(barcode_df)
@@ -273,11 +447,16 @@ def check_barcodes(data_file, barcode_file, log_fn, data_sheet=0, barcode_sheet=
     return needed, available
 
 
-def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0):
+def transform_rbl_data(
+    input_file, out_dir, selected_cols, log_fn, sheet_name=0,
+    barcode_only_first_slot=False,
+):
     df = read_data_file(input_file, sheet_name=sheet_name)
     slots = detect_person_slots(df.columns)
     log_fn(f"  Person slots detected → {len(slots)}  (name_1 / address_1 …)")
     log_fn(f"  Sheet → {sheet_name}")
+    if barcode_only_first_slot:
+        log_fn("  Barcode flag → only slot _1 will receive a barcode (link-loan mode)")
 
     if not slots:
         raise ValueError(
@@ -329,6 +508,9 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
             else:
                 pin_val = ""
 
+            slot_index = slot.get("index", 1)
+            needs_barcode = (not barcode_only_first_slot) or (slot_index == 1)
+
             # details_ / barcode_ — generated (or pass through if already in input)
             if slot.get("details") and _clean(row[slot["details"]]):
                 details_val = _clean(row[slot["details"]])
@@ -336,10 +518,14 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
                 details_val = build_details(
                     name, final_add, state_val, city_val, mobile_val, pin_val,
                 )
-            if slot.get("barcode") and _clean(row[slot["barcode"]]):
+            if needs_barcode and slot.get("barcode") and _clean(row[slot["barcode"]]):
                 barcode_val = _clean(row[slot["barcode"]])
-            else:
+            elif needs_barcode:
                 barcode_val = build_barcode_typst(b_val)
+            else:
+                # Link-loan: slots _2, _3… keep address data but no barcode
+                barcode_val = ""
+                b_val = ""
 
             base_vals = [_clean(row[c]) for c in selected_cols]
             rec = (
@@ -348,6 +534,7 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
                 + [
                     details_val, name, final_add, state_val, city_val, mobile_val,
                     sr_val, barcode_val, b_val, pin_val, count_val,
+                    1 if needs_barcode else 0,
                 ]
             )
             row_people.append(rec)
@@ -358,7 +545,7 @@ def transform_rbl_data(input_file, out_dir, selected_cols, log_fn, sheet_name=0)
         if n:
             grouped.setdefault(n, []).extend(row_people)
 
-    cols_out = ["Unique_ID"] + selected_cols + GROUP_COLS
+    cols_out = ["Unique_ID"] + selected_cols + GROUP_COLS + ["needs_barcode"]
     consolidated = pd.DataFrame(transformed, columns=cols_out)
 
     # Add ref_no helper for pivot (loan account / cust id)
@@ -410,16 +597,40 @@ def insert_barcodes(sticker_path, barcode_file, log_fn, barcode_sheet=0):
     barcode_df = pd.read_excel(barcode_file, sheet_name=barcode_sheet, usecols=[0])
     barcode_df = barcode_df.rename(columns={barcode_df.columns[0]: "barcode_raw"})
 
-    if len(barcode_df) < len(sticker_df):
+    # Link-loan mode: only rows flagged needs_barcode==1 consume a code
+    needs_col = None
+    for c in sticker_df.columns:
+        if _norm(c) == "needs_barcode":
+            needs_col = c
+            break
+    if needs_col is not None:
+        mask = sticker_df[needs_col].apply(
+            lambda v: str(v).strip().lower() in ("1", "1.0", "true", "yes")
+        )
+    else:
+        mask = pd.Series([True] * len(sticker_df), index=sticker_df.index)
+
+    n_needed = int(mask.sum())
+    if len(barcode_df) < n_needed:
         raise ValueError(
-            f"Not enough barcodes — have {len(barcode_df):,}, need {len(sticker_df):,}."
+            f"Not enough barcodes — have {len(barcode_df):,}, need {n_needed:,}."
         )
 
     codes = [_clean(v) for v in barcode_df["barcode_raw"].tolist()]
-    # Raw barcode value in column b
-    sticker_df["b"] = codes[: len(sticker_df)]
-    # Typst expression in column barcode (matches sample_output barcode_N)
-    sticker_df["barcode"] = [build_barcode_typst(c) for c in sticker_df["b"].tolist()]
+    code_iter = iter(codes)
+    b_vals = []
+    barcode_vals = []
+    for flag in mask.tolist():
+        if flag:
+            c = next(code_iter)
+            b_vals.append(c)
+            barcode_vals.append(build_barcode_typst(c))
+        else:
+            b_vals.append("")
+            barcode_vals.append("")
+
+    sticker_df["b"] = b_vals
+    sticker_df["barcode"] = barcode_vals
     # Refresh details in case address fields changed (usually already set)
     if "details" in sticker_df.columns:
         sticker_df["details"] = [
@@ -433,13 +644,24 @@ def insert_barcodes(sticker_path, barcode_file, log_fn, barcode_sheet=0):
             )
             for _, r in sticker_df.iterrows()
         ]
+    if needs_col is not None:
+        sticker_df = sticker_df.drop(columns=[needs_col])
     sticker_df.to_excel(sticker_path, index=False)
-    log_fn(f"  ✅ Barcodes inserted ({len(sticker_df):,} rows) — b + barcode Typst")
+    skipped = len(sticker_df) - n_needed
+    if skipped:
+        log_fn(
+            f"  ✅ Barcodes inserted on {n_needed:,} of {len(sticker_df):,} rows "
+            f"(skipped {skipped:,} non-_1 slots) — b + barcode Typst"
+        )
+    else:
+        log_fn(f"  ✅ Barcodes inserted ({len(sticker_df):,} rows) — b + barcode Typst")
 
 
 def pivot_and_sort(sticker_path, out_dir, selected_cols, first_col, max_groups, log_fn):
     df = pd.read_excel(sticker_path)
     df.columns = [_norm(c) for c in df.columns]
+    # Internal flag from transform — never pivot into output
+    df = df.drop(columns=["needs_barcode"], errors="ignore")
 
     group_col = "ref_no"
     if group_col not in df.columns:
@@ -543,8 +765,12 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._data_sheet = 0
         self._barcode_sheet = 0
         self._base_cols = []
+        self._all_cols = []
         self._detected_slots = 0
         self._col_vars = {}
+        self._link_expand_vars = {}
+        self._link_sum_vars = {}
+        self._do_link_loan = ctk.BooleanVar(value=False)
         self._first_col_var = ctk.StringVar(value="loan account no")
         self._max_grp_var = ctk.StringVar(value="2")
         self._build()
@@ -676,6 +902,110 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"],
         ).pack(anchor="w", padx=12, pady=8)
 
+        self._sec("Optional — Link loans (DLN)")
+        ctk.CTkLabel(
+            self,
+            text="If DLN has link loans (same CUST_ID, multiple loan rows), enable this to "
+                 "collapse them like Excel CUID Separator — but only the columns you tick "
+                 "get _1, _2, … suffixes. Leave unchecked when there are no link loans. "
+                 "When enabled, barcodes are assigned only to slot _1 (not _2, _3, …).",
+            font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
+            anchor="w", wraplength=700, justify="left",
+        ).pack(anchor="w", pady=(0, 4))
+
+        link_tog = ctk.CTkFrame(self, fg_color="transparent")
+        link_tog.pack(fill="x", pady=(0, 4))
+        ctk.CTkCheckBox(
+            link_tog, text="Data has link loans",
+            variable=self._do_link_loan,
+            font=ctk.CTkFont("Segoe UI", 12), text_color=C["text"],
+            fg_color=C["accent"], hover_color=TINT["bdr"],
+            border_color=C["border"], checkmark_color="#000",
+            command=self._toggle_link_loan_ui,
+        ).pack(side="left")
+        self._link_info_lbl = ctk.CTkLabel(
+            link_tog, text="",
+            font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"],
+        )
+        self._link_info_lbl.pack(side="left", padx=(16, 0))
+
+        self._link_opts = ctk.CTkFrame(
+            self, fg_color=C["card"], corner_radius=8,
+            border_width=1, border_color=C["border"],
+        )
+        self._link_opts.pack(fill="x", pady=(4, 10))
+
+        gb_row = ctk.CTkFrame(self._link_opts, fg_color="transparent")
+        gb_row.pack(fill="x", padx=12, pady=(10, 6))
+        ctk.CTkLabel(
+            gb_row, text="Group by:",
+            font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"], width=80,
+        ).pack(side="left")
+        self._link_groupby_cb = ctk.CTkComboBox(
+            gb_row, values=["(load file first)"], state="readonly",
+            font=ctk.CTkFont("Segoe UI", 12),
+            fg_color=C["hover"], border_color=C["border"],
+            button_color=TINT["mid"], button_hover_color=TINT["bdr"],
+            dropdown_fg_color=C["card"], dropdown_hover_color=C["hover"],
+            dropdown_text_color=C["text"], text_color=C["text"], height=30,
+            width=220,
+            command=self._on_link_groupby_change,
+        )
+        self._link_groupby_cb.set("(load file first)")
+        self._link_groupby_cb.pack(side="left", padx=(0, 12))
+
+        ctk.CTkLabel(
+            self._link_opts,
+            text="Columns to expand (_1, _2, …) — others keep first value only:",
+            font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
+            anchor="w",
+        ).pack(anchor="w", padx=12, pady=(0, 4))
+
+        link_sa = ctk.CTkFrame(self._link_opts, fg_color="transparent")
+        link_sa.pack(anchor="w", padx=12, pady=(0, 4))
+        for label, val in [("Select all", True), ("Clear all", False)]:
+            ctk.CTkButton(
+                link_sa, text=label, width=90, height=26,
+                fg_color=C["hover"], hover_color=C["border"],
+                border_color=C["border"], border_width=1,
+                text_color=C["muted"], font=ctk.CTkFont("Segoe UI", 11),
+                command=lambda v=val: self._set_all_link_expand(v),
+            ).pack(side="left", padx=(0, 8))
+
+        self._link_expand_grid = ctk.CTkFrame(self._link_opts, fg_color="transparent")
+        self._link_expand_grid.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkLabel(
+            self._link_expand_grid, text="  — load a data file first —",
+            font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"],
+        ).pack(anchor="w", padx=4, pady=4)
+
+        ctk.CTkLabel(
+            self._link_opts,
+            text="Columns to sum (adds sum_col per customer — optional):",
+            font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
+            anchor="w",
+        ).pack(anchor="w", padx=12, pady=(4, 4))
+
+        link_sum_sa = ctk.CTkFrame(self._link_opts, fg_color="transparent")
+        link_sum_sa.pack(anchor="w", padx=12, pady=(0, 4))
+        for label, val in [("Select all", True), ("Clear all", False)]:
+            ctk.CTkButton(
+                link_sum_sa, text=label, width=90, height=26,
+                fg_color=C["hover"], hover_color=C["border"],
+                border_color=C["border"], border_width=1,
+                text_color=C["muted"], font=ctk.CTkFont("Segoe UI", 11),
+                command=lambda v=val: self._set_all_link_sum(v),
+            ).pack(side="left", padx=(0, 8))
+
+        self._link_sum_grid = ctk.CTkFrame(self._link_opts, fg_color="transparent")
+        self._link_sum_grid.pack(fill="x", padx=8, pady=(0, 10))
+        ctk.CTkLabel(
+            self._link_sum_grid, text="  — load a data file first —",
+            font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"],
+        ).pack(anchor="w", padx=4, pady=4)
+
+        self._toggle_link_loan_ui()
+
         self._sec("Step 4 — Pivot options")
         opt_row = ctk.CTkFrame(self, fg_color="transparent")
         opt_row.pack(fill="x", pady=(0, 12))
@@ -770,6 +1100,99 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         for var in self._col_vars.values():
             var.set(value)
 
+    def _set_all_link_expand(self, value: bool):
+        for var in self._link_expand_vars.values():
+            var.set(value)
+
+    def _set_all_link_sum(self, value: bool):
+        for var in self._link_sum_vars.values():
+            var.set(value)
+
+    def _toggle_link_loan_ui(self):
+        enabled = bool(self._do_link_loan.get())
+        state = "normal" if enabled else "disabled"
+        try:
+            self._link_groupby_cb.configure(state="readonly" if enabled else "disabled")
+        except Exception:
+            pass
+        for grid in (self._link_expand_grid, self._link_sum_grid):
+            for child in grid.winfo_children():
+                try:
+                    child.configure(state=state)
+                except Exception:
+                    pass
+        self._link_opts.configure(
+            border_color=C["accent"] if enabled else C["border"],
+        )
+        if self._data_file and self._barcode_file:
+            self._async_barcode_check()
+
+    def _on_link_groupby_change(self, value=None):
+        if self._all_cols:
+            self._rebuild_link_expand_grid(self._all_cols)
+            self._rebuild_link_sum_grid(self._all_cols)
+        if self._data_file and self._barcode_file:
+            self._async_barcode_check()
+
+    def _rebuild_link_expand_grid(self, cols):
+        for w in self._link_expand_grid.winfo_children():
+            w.destroy()
+        self._link_expand_vars.clear()
+        groupby = self._link_groupby_cb.get()
+        expand_candidates = [c for c in cols if c != groupby]
+        for c in range(self.COLS_PER_ROW):
+            self._link_expand_grid.columnconfigure(c, weight=1)
+        if not expand_candidates:
+            ctk.CTkLabel(
+                self._link_expand_grid, text="  — no columns —",
+                font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"],
+            ).pack(anchor="w", padx=4, pady=4)
+            self._toggle_link_loan_ui()
+            return
+        for idx, col in enumerate(expand_candidates):
+            var = ctk.BooleanVar(value=_default_expand_col(col))
+            self._link_expand_vars[col] = var
+            cb = ctk.CTkCheckBox(
+                self._link_expand_grid, text=col, variable=var,
+                font=ctk.CTkFont("Segoe UI", 11), text_color=C["text"],
+                fg_color=C["accent"], hover_color=TINT["bdr"],
+                border_color=C["border"], checkmark_color="#000",
+            )
+            cb.grid(
+                row=idx // self.COLS_PER_ROW, column=idx % self.COLS_PER_ROW,
+                sticky="w", padx=10, pady=4,
+            )
+        self._toggle_link_loan_ui()
+
+    def _rebuild_link_sum_grid(self, cols):
+        for w in self._link_sum_grid.winfo_children():
+            w.destroy()
+        self._link_sum_vars.clear()
+        groupby = self._link_groupby_cb.get()
+        candidates = [c for c in cols if c != groupby]
+        for c in range(self.COLS_PER_ROW):
+            self._link_sum_grid.columnconfigure(c, weight=1)
+        if not candidates:
+            ctk.CTkLabel(
+                self._link_sum_grid, text="  — no columns —",
+                font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"],
+            ).pack(anchor="w", padx=4, pady=4)
+            self._toggle_link_loan_ui()
+            return
+        for idx, col in enumerate(candidates):
+            var = ctk.BooleanVar(value=_default_sum_col(col))
+            self._link_sum_vars[col] = var
+            cb = ctk.CTkCheckBox(
+                self._link_sum_grid, text=col, variable=var,
+                font=ctk.CTkFont("Segoe UI", 11), text_color=C["text"],
+                fg_color=C["accent"], hover_color=TINT["bdr"],
+                border_color=C["border"], checkmark_color="#000",
+            )
+            cb.grid(
+                row=idx // self.COLS_PER_ROW, column=idx % self.COLS_PER_ROW,
+                sticky="w", padx=10, pady=4,
+            )
+        self._toggle_link_loan_ui()
     def _rebuild_col_grid(self, cols):
         for w in self._col_grid.winfo_children():
             w.destroy()
@@ -837,10 +1260,38 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._detected_slots = len(slots)
         base_cols = [c for c in df.columns if not is_person_column(c)]
         self._base_cols = base_cols
+        self._all_cols = list(df.columns)
 
         self._rebuild_col_grid(base_cols)
         for var in self._col_vars.values():
             var.set(True)
+
+        # Link-loan group-by + expand columns
+        gb_vals = list(df.columns)
+        self._link_groupby_cb.configure(values=gb_vals if gb_vals else ["(none)"])
+        preferred_gb = find_col(
+            df.columns, "cust_id", "cuid", "customer id", "customer_id", "cust id",
+        )
+        self._link_groupby_cb.set(preferred_gb or (gb_vals[0] if gb_vals else "(none)"))
+        self._rebuild_link_expand_grid(self._all_cols)
+        self._rebuild_link_sum_grid(self._all_cols)
+
+        link_n, dln_col = detect_link_loan_hint(df)
+        if dln_col and link_n:
+            self._link_info_lbl.configure(
+                text=f"Detected {link_n:,} row(s) with 'Link' in {dln_col}",
+                text_color=C["orange"],
+            )
+        elif dln_col:
+            self._link_info_lbl.configure(
+                text=f"Column '{dln_col}' found — no 'Link' text detected",
+                text_color=C["faint"],
+            )
+        else:
+            self._link_info_lbl.configure(
+                text="No DLN column found",
+                text_color=C["faint"],
+            )
 
         named = []
         for i, slot in enumerate(slots):
@@ -919,17 +1370,24 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         barcode_sheet = self._barcode_sheet_cb.get()
         if data_sheet == "(csv)":
             data_sheet = 0
+        do_link = bool(self._do_link_loan.get())
+        link_groupby = self._link_groupby_cb.get() if do_link else None
+        if link_groupby in (None, "(load file first)", "(none)"):
+            link_groupby = None
 
         def _check():
             try:
                 needed, available = check_barcodes(
                     self._data_file, self._barcode_file, lambda *_: None,
                     data_sheet=data_sheet, barcode_sheet=barcode_sheet,
+                    barcode_only_first_slot=do_link,
+                    link_groupby=link_groupby if do_link else None,
                 )
                 spare = available - needed
+                suffix = " (link-loan: slot _1 only)" if do_link else ""
                 summary = (
                     f"✅  {available:,} barcodes available,  "
-                    f"{needed:,} needed  ({spare:,} spare)"
+                    f"{needed:,} needed  ({spare:,} spare){suffix}"
                 )
                 color = C["green"]
             except ValueError as e:
@@ -946,6 +1404,12 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
     def _get_selected_cols(self):
         return [col for col, var in self._col_vars.items() if var.get()]
 
+    def _get_link_expand_cols(self):
+        return [col for col, var in self._link_expand_vars.items() if var.get()]
+
+    def _get_link_sum_cols(self):
+        return [col for col, var in self._link_sum_vars.items() if var.get()]
+
     def _run(self):
         if not self._data_file:
             messagebox.showwarning("No File", "Please select a data file first.")
@@ -960,6 +1424,23 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         if not selected_cols:
             messagebox.showwarning("No Columns", "Please tick at least one column in Step 3.")
             return
+        do_link = bool(self._do_link_loan.get())
+        link_groupby = self._link_groupby_cb.get()
+        link_expand = self._get_link_expand_cols()
+        link_sum = self._get_link_sum_cols()
+        if do_link:
+            if not link_groupby or link_groupby in ("(load file first)", "(none)"):
+                messagebox.showwarning(
+                    "Link loans",
+                    "Select a group-by column (usually CUST_ID).",
+                )
+                return
+            if not link_expand:
+                messagebox.showwarning(
+                    "Link loans",
+                    "Tick at least one column to expand with _1, _2, …",
+                )
+                return
         try:
             max_groups = int(self._max_grp_var.get())
             if max_groups < 1:
@@ -974,16 +1455,22 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._prog.set(0)
         threading.Thread(
             target=self._process,
-            args=(selected_cols, first_col, max_groups),
+            args=(
+                selected_cols, first_col, max_groups,
+                do_link, link_groupby, link_expand, link_sum,
+            ),
             daemon=True,
         ).start()
 
-    def _process(self, selected_cols, first_col, max_groups):
+    def _process(
+        self, selected_cols, first_col, max_groups,
+        do_link, link_groupby, link_expand, link_sum,
+    ):
         out_dir = get_output_dir()
         do_barcode = self._do_barcode.get()
         do_pivot = self._do_pivot.get()
         do_split = self._do_split.get()
-        STEPS = 2 + sum([do_barcode, do_pivot, do_split])
+        STEPS = 2 + sum([do_link, do_barcode, do_pivot, do_split])
         step = [0]
 
         def advance(msg):
@@ -1005,20 +1492,53 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
             self._log(f"📁 Output:       {out_dir}")
             self._log(f"🔑 Columns:      {', '.join(selected_cols)}")
             self._log(f"🔠 First col:    {first_col or '(none)'}")
-            self._log(f"📦 Max slots:    {max_groups}\n")
+            self._log(f"📦 Max slots:    {max_groups}")
+            if do_link:
+                self._log(f"🔗 Link loans:   ON  groupby={link_groupby}")
+                self._log(f"   Expand:       {', '.join(link_expand)}")
+                self._log(
+                    f"   Sum:          {', '.join(link_sum) if link_sum else '(none)'}"
+                )
+            else:
+                self._log("🔗 Link loans:   OFF")
+            self._log("")
+
+            data_path = self._data_file
+            transform_sheet = data_sheet
+
+            if do_link:
+                self._log("🔄 Step 0 — Expand link loans (selected columns only)…")
+                df = read_data_file(self._data_file, sheet_name=data_sheet)
+                expanded, max_links = expand_link_loans(
+                    df, link_groupby, link_expand, self._log, sum_cols=link_sum,
+                )
+                data_path = os.path.join(out_dir, "00_link_loan_expanded.xlsx")
+                expanded.to_excel(data_path, index=False)
+                self._log(f"  ✅ Saved {os.path.basename(data_path)}")
+                selected_cols = remap_selected_after_expand(
+                    selected_cols, link_expand, max_links, sum_cols=link_sum,
+                )
+                if first_col in link_expand:
+                    first_col = f"{first_col}_1"
+                self._log(f"  🔑 Columns after expand: {', '.join(selected_cols)}")
+                transform_sheet = 0
+                advance("✔ Link-loan expand complete")
 
             if do_barcode:
                 self._log("🔍 Pre-flight — checking barcode count…")
                 check_barcodes(
-                    self._data_file, self._barcode_file, self._log,
-                    data_sheet=data_sheet, barcode_sheet=barcode_sheet,
+                    data_path, self._barcode_file, self._log,
+                    data_sheet=transform_sheet, barcode_sheet=barcode_sheet,
+                    barcode_only_first_slot=do_link,
+                    link_groupby=None,
                 )
                 self._log("")
 
             self._log("🔄 Step 1 — Transform numbered slots (name_1 / address_1 …) → sticker rows…")
             transform_rbl_data(
-                self._data_file, out_dir, selected_cols, self._log,
-                sheet_name=data_sheet,
+                data_path, out_dir, selected_cols, self._log,
+                sheet_name=transform_sheet,
+                barcode_only_first_slot=do_link,
             )
             advance("✔ Transform complete")
 
@@ -1028,6 +1548,8 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
 
             if do_barcode:
                 self._log("\n🏷️  Step 3 — Insert barcodes…")
+                if do_link:
+                    self._log("  (Link-loan: barcodes only on slot _1)")
                 insert_barcodes(
                     sticker_path, self._barcode_file, self._log,
                     barcode_sheet=barcode_sheet,
@@ -1096,7 +1618,7 @@ class App(ctk.CTk):
         ).pack(anchor="w")
         ctk.CTkLabel(
             tx,
-            text="RBL Excel with name_1 / address_1 … → Transform · Barcode · Pivot · Split",
+            text="RBL Excel with name_1 / address_1 … → [Link loans] · Transform · Barcode · Pivot · Split",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"],
         ).pack(anchor="w")
 
