@@ -22,6 +22,22 @@ C = {
 }
 TINT = {"bg": "#2e1e00", "mid": "#4a3000", "bdr": "#6b4500"}
 
+# Built-in Typst templates shipped with the project (New folder/)
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+BUILTIN_TEMPLATE_DIR = os.path.join(_PROJECT_ROOT, "New folder")
+CUSTOM_TEMPLATE_LABEL = "(Browse… custom file)"
+
+
+def list_builtin_templates():
+    """Return sorted list of (display_name, full_path) for .typ files in New folder/."""
+    found = []
+    if os.path.isdir(BUILTIN_TEMPLATE_DIR):
+        for name in sorted(os.listdir(BUILTIN_TEMPLATE_DIR)):
+            if name.lower().endswith(".typ"):
+                found.append((name, os.path.join(BUILTIN_TEMPLATE_DIR, name)))
+    return found
+
 
 # ─── Output path ──────────────────────────────────────────────────────────────
 def get_output_dir():
@@ -124,8 +140,12 @@ class StickerApp(ctk.CTk):
         self.template_path = None
         self.col_vars      = {}   # column name → BooleanVar
         self.output_dir    = None
+        # display_name → full path for built-in + optional custom selection
+        self._template_map = {}
+        self._custom_template_path = None
 
         self._build()
+        self._init_builtin_templates()
 
     # ── Build UI ──────────────────────────────────────────────────────────────
     def _build(self):
@@ -229,20 +249,49 @@ class StickerApp(ctk.CTk):
                                  border_width=1, border_color=C["border"])
         tmpl_card.pack(fill="x", pady=(4, 10))
 
-        self.tmpl_label = ctk.CTkLabel(
-            tmpl_card, text="No template selected",
+        tmpl_inner = ctk.CTkFrame(tmpl_card, fg_color="transparent")
+        tmpl_inner.pack(fill="x", padx=16, pady=12)
+
+        ctk.CTkLabel(
+            tmpl_inner,
+            text="Built-in templates from New folder/ — pick one, or Browse for a custom .typ:",
             font=ctk.CTkFont("Segoe UI", 11),
-            text_color=C["muted"], anchor="w")
-        self.tmpl_label.pack(side="left", padx=16, pady=12, fill="x", expand=True)
+            text_color=C["muted"], anchor="w",
+        ).pack(fill="x", pady=(0, 8))
+
+        row = ctk.CTkFrame(tmpl_inner, fg_color="transparent")
+        row.pack(fill="x")
+
+        self.tmpl_combo = ctk.CTkComboBox(
+            row,
+            values=["(no templates found)"],
+            state="readonly",
+            font=ctk.CTkFont("Segoe UI", 12),
+            fg_color=C["hover"], border_color=C["border"],
+            button_color=TINT["mid"], button_hover_color=TINT["bdr"],
+            dropdown_fg_color=C["card"], dropdown_hover_color=C["hover"],
+            dropdown_text_color=C["text"], text_color=C["text"],
+            height=34,
+            command=self._on_template_combo,
+        )
+        self.tmpl_combo.set("(no templates found)")
+        self.tmpl_combo.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
         ctk.CTkButton(
-            tmpl_card, text="Browse",
+            row, text="Browse",
             font=ctk.CTkFont("Segoe UI", 12, "bold"),
             fg_color=TINT["mid"], hover_color=TINT["bdr"],
             text_color=C["accent"], border_color=C["accent"], border_width=1,
             corner_radius=20, height=32, width=100,
-            command=self._browse_template
-        ).pack(side="right", padx=12, pady=8)
+            command=self._browse_template,
+        ).pack(side="right")
+
+        self.tmpl_label = ctk.CTkLabel(
+            tmpl_inner, text="No template selected",
+            font=ctk.CTkFont("Segoe UI", 10),
+            text_color=C["faint"], anchor="w",
+        )
+        self.tmpl_label.pack(fill="x", pady=(8, 0))
 
         # ── Progress & log ──
         self._section(body, "Progress")
@@ -297,15 +346,75 @@ class StickerApp(ctk.CTk):
             text=os.path.basename(path), text_color=C["accent"])
         self._load_columns(path)
 
+    def _init_builtin_templates(self):
+        """Load .typ files from New folder/ into the dropdown and pre-select one."""
+        builtins = list_builtin_templates()
+        self._template_map = {name: path for name, path in builtins}
+        values = [name for name, _ in builtins]
+        if not values:
+            self.tmpl_combo.configure(values=["(no templates in New folder)"])
+            self.tmpl_combo.set("(no templates in New folder)")
+            self.tmpl_label.configure(
+                text=f"Add .typ files to:\n{BUILTIN_TEMPLATE_DIR}",
+                text_color=C["faint"],
+            )
+            return
+
+        self.tmpl_combo.configure(values=values)
+        # Prefer sticker.typ, else first
+        preferred = None
+        for name in values:
+            if name.lower() == "sticker.typ":
+                preferred = name
+                break
+        if preferred is None:
+            preferred = values[0]
+        self.tmpl_combo.set(preferred)
+        self._apply_template_selection(preferred)
+
+    def _apply_template_selection(self, display_name):
+        if display_name == CUSTOM_TEMPLATE_LABEL and self._custom_template_path:
+            self.template_path = self._custom_template_path
+            self.tmpl_label.configure(
+                text=f"Custom: {self._custom_template_path}",
+                text_color=C["accent"],
+            )
+            return
+        path = self._template_map.get(display_name)
+        if path and os.path.isfile(path):
+            self.template_path = path
+            self.tmpl_label.configure(
+                text=f"Using: {path}",
+                text_color=C["accent"],
+            )
+        else:
+            self.template_path = None
+            self.tmpl_label.configure(
+                text="No template selected",
+                text_color=C["faint"],
+            )
+
+    def _on_template_combo(self, value=None):
+        self._apply_template_selection(value or self.tmpl_combo.get())
+
     def _browse_template(self):
         path = filedialog.askopenfilename(
             title="Select Typst template",
             filetypes=[("Typst files", "*.typ"), ("All files", "*.*")])
         if not path:
             return
+        self._custom_template_path = path
         self.template_path = path
+        # Keep built-ins in the list + a custom entry
+        values = list(self._template_map.keys())
+        if CUSTOM_TEMPLATE_LABEL not in values:
+            values.append(CUSTOM_TEMPLATE_LABEL)
+        self.tmpl_combo.configure(values=values)
+        self.tmpl_combo.set(CUSTOM_TEMPLATE_LABEL)
         self.tmpl_label.configure(
-            text=os.path.basename(path), text_color=C["accent"])
+            text=f"Custom: {path}",
+            text_color=C["accent"],
+        )
 
     # ── Load columns from Excel ───────────────────────────────────────────────
     def _load_columns(self, path):
