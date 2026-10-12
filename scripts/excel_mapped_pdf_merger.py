@@ -1,7 +1,8 @@
 """
 Tool: Excel Mapped PDF Merger
-Merge PDFs from 3 folders using Excel column mapping for filenames.
+Merge PDFs from 1–3 folders using Excel column mapping for filenames.
 Example: Notice (loan no) + Dispatch proof (barcode) + Tracking proof (barcode).
+At least one PDF source folder is required; unused sources can be left blank.
 """
 
 import os
@@ -259,7 +260,7 @@ class App(ctk.CTk):
         ).pack(anchor="w")
         ctk.CTkLabel(
             inn,
-            text="Merge 3 PDF folders using Excel columns for filenames (e.g. notice + dispatch + tracking).",
+            text="Merge 1–3 PDF folders using Excel columns for filenames (at least one folder required).",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"],
         ).pack(anchor="w")
 
@@ -321,7 +322,7 @@ class App(ctk.CTk):
             text_color=C["text"], command=self._pick_excel,
         ).pack(side="right")
 
-        self._sec(body, "PDF sources (merged in this order)")
+        self._sec(body, "PDF sources (merged in this order — pick at least 1)")
         self._folder_lbls = {}
         src_card = ctk.CTkFrame(
             body, fg_color=C["card"], corner_radius=12,
@@ -337,11 +338,17 @@ class App(ctk.CTk):
                 text_color=C["text"], width=150, anchor="w",
             ).pack(side="left")
             fl = ctk.CTkLabel(
-                top, text="No folder", font=ctk.CTkFont("Segoe UI", 11),
+                top, text="Optional — no folder", font=ctk.CTkFont("Segoe UI", 11),
                 text_color=C["faint"], anchor="w",
             )
             fl.pack(side="left", fill="x", expand=True, padx=8)
             self._folder_lbls[key] = fl
+            ctk.CTkButton(
+                top, text="Clear", width=60, height=30,
+                fg_color=C["hover"], hover_color=C["border"],
+                text_color=C["muted"],
+                command=lambda k=key: self._clear_folder(k),
+            ).pack(side="right", padx=(6, 0))
             ctk.CTkButton(
                 top, text="Browse…", width=80, height=30,
                 fg_color=C["hover"], hover_color=C["border"],
@@ -385,7 +392,8 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(
             body,
-            text="Pick columns from the Excel headers. PDFs are looked up as <column value>.pdf. Missing any PDF skips the row.",
+            text="Only browsed folders are used. Set a filename column for each selected folder. "
+                 "PDFs are looked up as <column value>.pdf — missing any selected PDF skips the row.",
             font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"], anchor="w",
         ).pack(fill="x", pady=(0, 8))
 
@@ -473,6 +481,13 @@ class App(ctk.CTk):
             text_color=C["accent"],
         )
 
+    def _clear_folder(self, key):
+        self._folder_paths[key] = None
+        self._folder_lbls[key].configure(
+            text="Optional — no folder",
+            text_color=C["faint"],
+        )
+
     def _start(self):
         if not self._excel_path:
             messagebox.showwarning("Missing", "Select the Excel mapping file.")
@@ -490,11 +505,13 @@ class App(ctk.CTk):
         for key, label, _ in SOURCES:
             folder = self._folder_paths[key]
             if not folder:
-                messagebox.showwarning("Missing", f"Select a folder for {label}.")
-                return
+                continue  # optional — skip unused sources
             col = self._combos[key].get().strip()
             if not col or col.startswith("("):
-                messagebox.showwarning("Missing", f"Select filename column for {label}.")
+                messagebox.showwarning(
+                    "Missing",
+                    f"Select filename column for {label} (folder is selected).",
+                )
                 return
             sources.append({
                 "key": key,
@@ -502,6 +519,13 @@ class App(ctk.CTk):
                 "folder": folder,
                 "column": col,
             })
+
+        if len(sources) < 1:
+            messagebox.showwarning(
+                "Sources",
+                "Select at least 1 PDF source folder (Browse… on Notice / Dispatch / Tracking).",
+            )
+            return
 
         out_col = self._combos["output"].get().strip()
         if not out_col or out_col.startswith("("):
