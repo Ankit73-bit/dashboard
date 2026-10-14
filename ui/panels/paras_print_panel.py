@@ -91,6 +91,32 @@ PARAS_PRINT_SERVICES = [
         },
     },
     {
+        "title":       "Image to PDF",
+        "description": "Convert any image (JPG, PNG, BMP, GIF, TIFF, WEBP…) or a whole folder into PDF — one file each or one merged PDF.",
+        "icon":        "📄",
+        "accent":      C["orange"],
+        "tag":         "PDF · Images",
+        "script":      os.path.join(PP_SCRIPTS, "image_to_pdf.py"),
+        "sample":      None,
+        "docs": {
+            "what": "Reverse of PDF to JPG. Uses Pillow to turn a single image or a folder of images into PDF. Choose one PDF per image, or merge every image into one multi-page PDF.",
+            "when": "Use this when you have photos/scans and need PDF output for print, upload, or archiving.",
+            "steps": [
+                ("Select mode", "Choose 'Single image file' or 'Folder of images'."),
+                ("Browse source", "Click 'Browse…' to pick the image or folder."),
+                ("Choose output style", "'One PDF per image' or 'Merge all into one PDF'."),
+                ("Click Run", "Click '▶  Convert to PDF'. Output folder opens when done."),
+            ],
+            "tips": [
+                "Requires Pillow: pip install Pillow",
+                "Supports JPG, JPEG, PNG, BMP, GIF, TIFF, WEBP, ICO, JFIF (and HEIC if your Pillow build supports it).",
+                "Transparent PNGs are placed on a white background in the PDF.",
+                "Merged mode writes images_merged.pdf; per-image mode writes <name>.pdf.",
+            ],
+            "output": "Desktop\\OUTPUT\\Image_to_PDF\\<timestamp>\\",
+        },
+    },
+    {
         "title":       "Photo Splitter",
         "description": "Match employee photos to Excel lists and copy them into separate folders per Excel file.",
         "icon":        "🗂️",
