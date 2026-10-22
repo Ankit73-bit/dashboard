@@ -6,12 +6,18 @@ Embeddable Panel + standalone window.
 """
 
 import os
+import sys
 import threading
 import subprocess
 from pathlib import Path
 from datetime import datetime
 
 import customtkinter as ctk
+
+_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen, attach_panel_chrome
 from tkinter import filedialog, messagebox, colorchooser
 
 ctk.set_appearance_mode("dark")
@@ -65,11 +71,13 @@ def _check_deps():
 
 # ─── Embeddable Panel Content ─────────────────────────────────────────────────
 
-class BgChangerPanelContent(ctk.CTkScrollableFrame):
+class BgChangerPanelContent(ctk.CTkFrame):
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color="transparent",
-                         scrollbar_button_color=C["border"], **kw)
+        kw.pop("scrollbar_button_color", None)
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._body, self._prog, self._stat, self._run_btn = attach_panel_chrome(
+            self, C, TINT, '▶  Change Background', self._run)
         self._photos_folder = None
         self._hex_color     = "#FFFFFF"
         self._build()
@@ -78,7 +86,7 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
         # Dependency warnings
         missing = _check_deps()
         if missing:
-            warn = ctk.CTkFrame(self, fg_color="#300a14", corner_radius=10,
+            warn = ctk.CTkFrame(self._body, fg_color="#300a14", corner_radius=10,
                                 border_width=1, border_color=C["red"])
             warn.pack(fill="x", pady=(4, 10))
             ctk.CTkLabel(warn,
@@ -88,7 +96,7 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
                          ).pack(anchor="w", padx=14, pady=8)
 
         # Output banner
-        banner = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=10,
+        banner = ctk.CTkFrame(self._body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
         banner.pack(fill="x", pady=(4, 14))
         ctk.CTkLabel(banner,
@@ -98,7 +106,7 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
 
         # Step 1 — Photos folder
         self._sec("Step 1 — Select photos folder")
-        pr = ctk.CTkFrame(self, fg_color="transparent")
+        pr = ctk.CTkFrame(self._body, fg_color="transparent")
         pr.pack(fill="x", pady=(0, 10))
         self._photos_lbl = ctk.CTkLabel(
             pr, text="No folder selected",
@@ -113,7 +121,7 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
 
         # Step 2 — Size & DPI
         self._sec("Step 2 — Target size & DPI")
-        dims = ctk.CTkFrame(self, fg_color="transparent")
+        dims = ctk.CTkFrame(self._body, fg_color="transparent")
         dims.pack(fill="x", pady=(0, 10))
 
         for label, var_name, default, width in [
@@ -135,7 +143,7 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
         self._sec("Step 3 — Background colour")
 
         # Swatch grid
-        swatch_outer = ctk.CTkFrame(self, fg_color="transparent")
+        swatch_outer = ctk.CTkFrame(self._body, fg_color="transparent")
         swatch_outer.pack(fill="x", pady=(0, 8))
         for i, (label, hex_val) in enumerate(PRESETS):
             ctk.CTkButton(
@@ -150,7 +158,7 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
             swatch_outer.columnconfigure(col, weight=1)
 
         # Custom hex row
-        custom_row = ctk.CTkFrame(self, fg_color="transparent")
+        custom_row = ctk.CTkFrame(self._body, fg_color="transparent")
         custom_row.pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(custom_row, text="Custom hex:",
                      font=ctk.CTkFont("Segoe UI", 11),
@@ -171,32 +179,10 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
                                      border_width=1, border_color=C["border"])
         self._preview.pack(side="left")
 
-        # Step 4 — Run
-        self._sec("Step 4 — Run")
-        self._run_btn = ctk.CTkButton(
-            self, text="▶  Change Background",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["bg"], hover_color=TINT["mid"],
-            border_color=C["accent"], border_width=1,
-            text_color=C["accent"], height=44,
-            command=self._run)
-        self._run_btn.pack(fill="x", pady=(0, 10))
-
-        self._prog = ctk.CTkProgressBar(
-            self, fg_color=C["card"], progress_color=C["accent"], height=8)
-        self._prog.set(0)
-        self._prog.pack(fill="x", pady=(0, 4))
-
-        self._stat = ctk.CTkLabel(
-            self, text="Ready.",
-            font=ctk.CTkFont("Segoe UI", 11),
-            text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 10))
-
         # Log
         self._sec("Log")
         self._log_box = ctk.CTkTextbox(
-            self, height=200, fg_color=C["card"],
+            self._body, height=200, fg_color=C["card"],
             border_color=C["border"], border_width=1,
             text_color=C["text"], font=ctk.CTkFont("Consolas", 11))
         self._log_box.pack(fill="both", expand=True, pady=(0, 16))
@@ -204,7 +190,7 @@ class BgChangerPanelContent(ctk.CTkScrollableFrame):
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _sec(self, t):
-        ctk.CTkLabel(self, text=t.upper(),
+        ctk.CTkLabel(self._body, text=t.upper(),
                      font=ctk.CTkFont("Segoe UI", 10, "bold"),
                      text_color=C["muted"]).pack(anchor="w", pady=(8, 3))
 
@@ -367,7 +353,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("BG Changer")
-        self.geometry("820x860")
+        fit_to_screen(self, 820, 760)
         self.configure(fg_color=C["bg"])
 
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)

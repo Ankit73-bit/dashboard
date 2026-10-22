@@ -6,6 +6,7 @@ Location Code). Outputs data.xlsx ready for Grouped Excel.
 """
 
 import os
+import sys
 import re
 import threading
 import subprocess
@@ -14,6 +15,11 @@ from datetime import datetime
 import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+
+_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen, add_run_footer, add_primary_run_button
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -24,7 +30,7 @@ BASE_OUT = os.path.join(DESKTOP, "OUTPUT", "Network_Data_Builder")
 C = {
     "bg":     "#0a0a0f", "card":   "#16161f", "hover":  "#1e1e2e",
     "border": "#2a2a3d", "text":   "#e8e8f0", "muted":  "#8888aa",
-    "faint":  "#44445a", "cyan":   "#00f5ff", "green":  "#30d158",
+    "faint":  "#44445a", "cyan":   "#00f5ff", "accent": "#00f5ff", "green":  "#30d158",
     "red":    "#ff375f", "orange": "#ff9f0a",
 }
 TINT = {"bg": "#062d30", "mid": "#0a4a4e", "bdr": "#0d6b70"}
@@ -217,9 +223,8 @@ class NetworkDataBuilderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Network Data Builder")
-        self.geometry("780x820")
-        self.minsize(720, 700)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 780, 760, min_w=700, min_h=560)
         self._pfl_path = None
         self._net_path = None
         self._pfl_columns = []
@@ -247,9 +252,13 @@ class NetworkDataBuilderApp(ctk.CTk):
                      font=ctk.CTkFont("Segoe UI", 11),
                      text_color=C["muted"]).pack(anchor="w")
 
+        _, fi, self._prog, self._stat = add_run_footer(self, C, TINT)
+        self._run_btn = add_primary_run_button(
+            fi, "▶  Build data.xlsx", self._start, C, TINT)
+
         body = ctk.CTkScrollableFrame(self, fg_color="transparent",
                                       scrollbar_button_color=C["border"])
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 8))
 
         banner = ctk.CTkFrame(body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["cyan"])
@@ -354,33 +363,13 @@ class NetworkDataBuilderApp(ctk.CTk):
             text_color=C["muted"], justify="left", anchor="w"
         ).pack(anchor="w", padx=14, pady=10)
 
-        self._section(body, "Progress")
-        self._prog = ctk.CTkProgressBar(body, height=8, fg_color=C["card"],
-                                        progress_color=C["cyan"])
-        self._prog.pack(fill="x", pady=(4, 8))
-        self._prog.set(0)
-
-        self._stat = ctk.CTkLabel(body, text="Ready.",
-                                  font=ctk.CTkFont("Segoe UI", 11),
-                                  text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 8))
-
+        self._section(body, "Log")
         self._log = ctk.CTkTextbox(body, height=140,
                                    font=ctk.CTkFont("Courier New", 11),
                                    fg_color=C["card"],
                                    border_color=C["border"], border_width=1,
                                    text_color=C["muted"], state="disabled")
-        self._log.pack(fill="x", pady=(0, 16))
-
-        self._run_btn = ctk.CTkButton(
-            body, text="▶  Build data.xlsx",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["cyan"],
-            border_color=C["cyan"], border_width=1,
-            corner_radius=24, height=48,
-            command=self._start)
-        self._run_btn.pack(fill="x", pady=(0, 20))
+        self._log.pack(fill="x", pady=(0, 12))
 
     def _mapping_card(self, parent, title, rows):
         """Build a card of label + combobox rows. Returns dict of role → CTkComboBox."""

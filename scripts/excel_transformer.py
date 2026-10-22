@@ -14,6 +14,7 @@ from datetime import datetime
 import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+from window_fit import fit_to_screen, attach_panel_chrome
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -208,13 +209,15 @@ def split_by_address_count(pivot_path, out_dir, log_fn):
 
 # ─── UI ────────────────────────────────────────────────────────────────────────
 
-class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
+class ExcelTransformerPanelContent(ctk.CTkFrame):
 
     COLS_PER_ROW = 3
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color="transparent",
-                         scrollbar_button_color=C["border"], **kw)
+        kw.pop("scrollbar_button_color", None)
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._body, self._prog, self._stat, self._run_btn = attach_panel_chrome(
+            self, C, TINT, '▶  Run Pipeline', self._run)
         self._data_file    = None
         self._barcode_file = None
         self._base_cols    = []
@@ -227,7 +230,7 @@ class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
     # ── Layout ─────────────────────────────────────────────────────────────────
     def _build(self):
         # Output banner
-        banner = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=10,
+        banner = ctk.CTkFrame(self._body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
         banner.pack(fill="x", pady=(4, 14))
         ctk.CTkLabel(
@@ -238,7 +241,7 @@ class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
 
         # ── Step 1: Data file ──────────────────────────────────────────────────
         self._sec("Step 1 — Select data file")
-        fr1 = ctk.CTkFrame(self, fg_color="transparent")
+        fr1 = ctk.CTkFrame(self._body, fg_color="transparent")
         fr1.pack(fill="x", pady=(0, 4))
         self._data_lbl = ctk.CTkLabel(
             fr1, text="No file selected",
@@ -253,14 +256,14 @@ class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
 
         # Groups-detected info line (shown after file pick)
         self._file_info = ctk.CTkLabel(
-            self, text="",
+            self._body, text="",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["blue"],
             anchor="w", wraplength=700, justify="left")
         self._file_info.pack(anchor="w", pady=(2, 10))
 
         # ── Step 2: Barcode file ───────────────────────────────────────────────
         self._sec("Step 2 — Select barcode file  (barcode.xlsx)")
-        fr2 = ctk.CTkFrame(self, fg_color="transparent")
+        fr2 = ctk.CTkFrame(self._body, fg_color="transparent")
         fr2.pack(fill="x", pady=(0, 4))
         self._barcode_lbl = ctk.CTkLabel(
             fr2, text="No file selected",
@@ -275,14 +278,14 @@ class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
 
         # Live barcode check result
         self._barcode_info = ctk.CTkLabel(
-            self, text="",
+            self._body, text="",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"], anchor="w")
         self._barcode_info.pack(anchor="w", pady=(2, 10))
 
         # ── Step 3: Column selector ────────────────────────────────────────────
         self._sec("Step 3 — Select columns")
         self._col_hint = ctk.CTkLabel(
-            self,
+            self._body,
             text="Select a data file to load its columns.  "
                  "All are selected by default — untick any you want to exclude.",
             font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
@@ -290,7 +293,7 @@ class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
         self._col_hint.pack(anchor="w", pady=(0, 4))
 
         # Select-all / Clear-all buttons
-        sa_row = ctk.CTkFrame(self, fg_color="transparent")
+        sa_row = ctk.CTkFrame(self._body, fg_color="transparent")
         sa_row.pack(anchor="w", pady=(0, 4))
         for label, val in [("Select all", True), ("Clear all", False)]:
             ctk.CTkButton(
@@ -302,7 +305,7 @@ class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
             ).pack(side="left", padx=(0, 8))
 
         self._col_grid = ctk.CTkFrame(
-            self, fg_color=C["card"], corner_radius=8,
+            self._body, fg_color=C["card"], corner_radius=8,
             border_width=1, border_color=C["border"])
         self._col_grid.pack(fill="x", pady=(4, 10))
         ctk.CTkLabel(
@@ -312,7 +315,7 @@ class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
 
         # ── Step 4: Pivot options ──────────────────────────────────────────────
         self._sec("Step 4 — Pivot options")
-        opt_row = ctk.CTkFrame(self, fg_color="transparent")
+        opt_row = ctk.CTkFrame(self._body, fg_color="transparent")
         opt_row.pack(fill="x", pady=(0, 12))
 
         # First column
@@ -341,7 +344,7 @@ class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
 
         # ── Step 5: Pipeline toggles ───────────────────────────────────────────
         self._sec("Step 5 — Pipeline steps to run")
-        tog_row = ctk.CTkFrame(self, fg_color="transparent")
+        tog_row = ctk.CTkFrame(self._body, fg_color="transparent")
         tog_row.pack(fill="x", pady=(0, 12))
 
         self._do_barcode = ctk.BooleanVar(value=True)
@@ -360,38 +363,17 @@ class ExcelTransformerPanelContent(ctk.CTkScrollableFrame):
                 border_color=C["border"], checkmark_color="#000"
             ).pack(side="left", padx=(0, 24))
 
-        # ── Run ────────────────────────────────────────────────────────────────
-        self._sec("Run")
-        self._run_btn = ctk.CTkButton(
-            self, text="▶  Run Pipeline",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["bg"], hover_color=TINT["mid"],
-            border_color=C["accent"], border_width=1,
-            text_color=C["accent"], height=44,
-            command=self._run)
-        self._run_btn.pack(fill="x", pady=(0, 10))
-
-        self._prog = ctk.CTkProgressBar(
-            self, fg_color=C["card"], progress_color=C["accent"], height=8)
-        self._prog.set(0)
-        self._prog.pack(fill="x", pady=(0, 4))
-
-        self._stat = ctk.CTkLabel(
-            self, text="Ready.",
-            font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 10))
-
         # ── Log ────────────────────────────────────────────────────────────────
         self._sec("Log")
         self._log_box = ctk.CTkTextbox(
-            self, height=220, fg_color=C["card"],
+            self._body, height=220, fg_color=C["card"],
             border_color=C["border"], border_width=1,
             text_color=C["text"], font=ctk.CTkFont("Consolas", 11))
         self._log_box.pack(fill="both", expand=True, pady=(0, 16))
 
     # ── Small helpers ──────────────────────────────────────────────────────────
     def _sec(self, t):
-        ctk.CTkLabel(self, text=t.upper(),
+        ctk.CTkLabel(self._body, text=t.upper(),
                      font=ctk.CTkFont("Segoe UI", 10, "bold"),
                      text_color=C["muted"]).pack(anchor="w", pady=(8, 3))
 
@@ -661,7 +643,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Excel Transformer")
-        self.geometry("820x800")
+        fit_to_screen(self, 820, 760)
         self.configure(fg_color=C["bg"])
 
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)

@@ -17,6 +17,7 @@ import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from pypdf import PdfReader, PdfWriter
+from window_fit import fit_to_screen, add_run_footer, add_primary_run_button
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -231,9 +232,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("PDF Split & Rename")
-        self.geometry("760x820")
-        self.minsize(680, 700)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 760, 760, min_h=560)
         self._pdfs = []
         self._excel_path = None
         self._excel_columns = []
@@ -262,11 +262,15 @@ class App(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"],
         ).pack(anchor="w")
 
+        _, fi, self._prog, self._stat = add_run_footer(self, C, TINT)
+        self._run_btn = add_primary_run_button(
+            fi, "▶  Split & Rename", self._start, C, TINT)
+
         body = ctk.CTkScrollableFrame(
             self, fg_color="transparent",
             scrollbar_button_color=C["border"],
         )
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 8))
 
         banner = ctk.CTkFrame(
             body, fg_color=TINT["bg"], corner_radius=10,
@@ -406,34 +410,13 @@ class App(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
         )
 
-        self._section(body, "Progress")
-        self._prog = ctk.CTkProgressBar(
-            body, height=8, fg_color=C["card"], progress_color=C["accent"],
-        )
-        self._prog.pack(fill="x", pady=(4, 8))
-        self._prog.set(0)
-        self._stat = ctk.CTkLabel(
-            body, text="Ready.",
-            font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"], anchor="w",
-        )
-        self._stat.pack(fill="x", pady=(0, 8))
+        self._section(body, "Log")
         self._log = ctk.CTkTextbox(
             body, height=200, font=ctk.CTkFont("Courier New", 11),
             fg_color=C["card"], border_color=C["border"], border_width=1,
             text_color=C["muted"], state="disabled",
         )
-        self._log.pack(fill="x", pady=(0, 16))
-
-        self._run_btn = ctk.CTkButton(
-            body, text="▶  Split & Rename",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"],
-            border_color=C["accent"], border_width=1,
-            corner_radius=24, height=48,
-            command=self._start,
-        )
-        self._run_btn.pack(fill="x", pady=(0, 20))
+        self._log.pack(fill="x", pady=(0, 12))
 
         self._on_mode_change(MODE_PATTERN)
 

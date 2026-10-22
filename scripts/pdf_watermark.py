@@ -7,6 +7,7 @@ from datetime import datetime
 from PyPDF2 import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
+from window_fit import fit_to_screen, add_run_footer, add_primary_run_button
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -82,9 +83,8 @@ class WatermarkApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("PDF Watermark Tool")
-        self.geometry("720x760")
-        self.resizable(False, False)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 720, 720)
         self.selected_files = []
         self._build()
 
@@ -112,10 +112,14 @@ class WatermarkApp(ctk.CTk):
                      font=ctk.CTkFont("Segoe UI", 11),
                      text_color=C["muted"]).pack(anchor="w")
 
+        _, fi, self.progress, self.stat = add_run_footer(self, C, TINT)
+        self.run_btn = add_primary_run_button(
+            fi, "🔏  Apply Watermark", self._start, C, TINT)
+
         # ── Body ────────────────────────────────────────────────────────────
         body = ctk.CTkScrollableFrame(self, fg_color="transparent",
                                       scrollbar_button_color=C["border"])
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 8))
 
         # ── Section: Select PDFs ──
         self._section(body, "📂  Select PDF Files")
@@ -240,14 +244,8 @@ class WatermarkApp(ctk.CTk):
                 fg_color=C["accent"], hover_color=TINT["bdr"]
             ).pack(side="left", padx=(0, 18))
 
-        # ── Section: Progress & Log ──
-        self._section(body, "📋  Progress")
-
-        self.progress = ctk.CTkProgressBar(body, height=8,
-                                           fg_color=C["card"],
-                                           progress_color=C["accent"])
-        self.progress.pack(fill="x", pady=(4, 8))
-        self.progress.set(0)
+        # ── Section: Log ──
+        self._section(body, "📋  Log")
 
         self.log = ctk.CTkTextbox(body, height=130,
                                   font=ctk.CTkFont("Courier New", 11),
@@ -255,18 +253,7 @@ class WatermarkApp(ctk.CTk):
                                   border_color=C["border"], border_width=1,
                                   text_color=C["muted"],
                                   state="disabled")
-        self.log.pack(fill="x", pady=(0, 16))
-
-        # ── Run button ──
-        self.run_btn = ctk.CTkButton(
-            body, text="🔏  Apply Watermark",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"],
-            border_color=C["accent"], border_width=1,
-            corner_radius=24, height=48,
-            command=self._start)
-        self.run_btn.pack(fill="x", pady=(0, 20))
+        self.log.pack(fill="x", pady=(0, 12))
 
     # ── UI helpers ────────────────────────────────────────────────────────────
     def _section(self, parent, text):

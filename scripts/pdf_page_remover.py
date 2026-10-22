@@ -13,6 +13,7 @@ from datetime import datetime
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from pypdf import PdfReader, PdfWriter
+from window_fit import fit_to_screen, add_run_footer, add_primary_run_button
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -107,8 +108,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("PDF Page Remover")
-        self.geometry("720x640")
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 720, 640)
         self._pdf = None
         self._page_count = 0
         self._build()
@@ -134,9 +135,13 @@ class App(ctk.CTk):
                      font=ctk.CTkFont("Segoe UI", 11),
                      text_color=C["muted"]).pack(anchor="w")
 
+        _, fi, self._prog, self._stat = add_run_footer(self, C, TINT)
+        self._run_btn = add_primary_run_button(
+            fi, "▶  Remove Pages", self._start, C, TINT)
+
         body = ctk.CTkScrollableFrame(self, fg_color="transparent",
                                       scrollbar_button_color=C["border"])
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 8))
 
         banner = ctk.CTkFrame(body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
@@ -182,31 +187,13 @@ class App(ctk.CTk):
         )
         self._pages_e.pack(fill="x", pady=(0, 14))
 
-        self._section(body, "Progress")
-        self._prog = ctk.CTkProgressBar(body, height=8, fg_color=C["card"],
-                                        progress_color=C["accent"])
-        self._prog.pack(fill="x", pady=(4, 8))
-        self._prog.set(0)
-        self._stat = ctk.CTkLabel(body, text="Ready.",
-                                  font=ctk.CTkFont("Segoe UI", 11),
-                                  text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 8))
+        self._section(body, "Log")
         self._log = ctk.CTkTextbox(body, height=180,
                                    font=ctk.CTkFont("Courier New", 11),
                                    fg_color=C["card"],
                                    border_color=C["border"], border_width=1,
                                    text_color=C["muted"], state="disabled")
-        self._log.pack(fill="x", pady=(0, 16))
-
-        self._run_btn = ctk.CTkButton(
-            body, text="▶  Remove Pages",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"],
-            border_color=C["accent"], border_width=1,
-            corner_radius=24, height=48,
-            command=self._start)
-        self._run_btn.pack(fill="x", pady=(0, 20))
+        self._log.pack(fill="x", pady=(0, 12))
 
     def _section(self, parent, text):
         ctk.CTkLabel(parent, text=text,

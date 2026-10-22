@@ -4,6 +4,7 @@ Split scanned PDFs, read barcodes, rename by barcode.
 """
 
 import os
+import sys
 import csv
 import shutil
 import threading
@@ -21,6 +22,10 @@ DESKTOP  = os.path.join(os.path.expanduser("~"), "Desktop")
 BASE_OUT = os.path.join(DESKTOP, "OUTPUT", "Scan_Split_Rename")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 POPPLER_PATH = os.path.join(_HERE, "poppler-25.07.0", "Library", "bin")
+_SCRIPTS = os.path.normpath(os.path.join(_HERE, "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen, add_run_footer, add_primary_run_button
 
 C = {
     "bg": "#0a0a0f", "card": "#16161f", "hover": "#1e1e2e",
@@ -180,8 +185,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Barcode Split & Rename")
-        self.geometry("760x700")
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 760, 700)
         self._folder = None
         self._build()
 
@@ -194,11 +199,15 @@ class App(ctk.CTk):
                      font=ctk.CTkFont("Segoe UI", 18, "bold"),
                      text_color=C["text"]).pack(anchor="w")
         ctk.CTkLabel(inn, text="Scan Step 1 — split PDFs · read barcodes · rename",
-                     font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"]).pack(anchor="w")
+                     font=ctk.CTkFont("Segoe UI", 11),                      text_color=C["muted"]).pack(anchor="w")
+
+        _, fi, self._prog, self._stat = add_run_footer(self, C, TINT)
+        self._run_btn = add_primary_run_button(
+            fi, "▶  Split & Rename", self._start, C, TINT)
 
         body = ctk.CTkScrollableFrame(self, fg_color="transparent",
                                       scrollbar_button_color=C["border"])
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 8))
 
         banner = ctk.CTkFrame(body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
@@ -236,25 +245,10 @@ class App(ctk.CTk):
         self._pages_e.grid(row=0, column=1, padx=16, pady=14, sticky="w")
         self._pages_e.insert(0, "2")
 
-        self._prog = ctk.CTkProgressBar(body, height=8, fg_color=C["card"],
-                                        progress_color=C["accent"])
-        self._prog.pack(fill="x", pady=(4, 6))
-        self._prog.set(0)
-        self._stat = ctk.CTkLabel(body, text="Ready.", font=ctk.CTkFont("Segoe UI", 11),
-                                  text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 6))
         self._log = ctk.CTkTextbox(body, height=220, font=ctk.CTkFont("Courier New", 11),
                                    fg_color=C["card"], border_color=C["border"],
                                    border_width=1, text_color=C["muted"], state="disabled")
         self._log.pack(fill="x", pady=(0, 12))
-
-        self._run_btn = ctk.CTkButton(
-            body, text="▶  Split & Rename",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"], border_color=C["accent"], border_width=1,
-            corner_radius=24, height=46, command=self._start)
-        self._run_btn.pack(fill="x", pady=(0, 16))
 
     def _sec(self, p, t):
         ctk.CTkLabel(p, text=t, font=ctk.CTkFont("Segoe UI", 12, "bold"),

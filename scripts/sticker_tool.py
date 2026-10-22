@@ -132,9 +132,10 @@ class StickerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Sticker Format Tool")
-        self.geometry("760x850")
-        self.resizable(False, False)
         self.configure(fg_color=C["bg"])
+        self.minsize(640, 520)
+        self.resizable(True, True)
+        self._fit_to_screen()
 
         self.excel_path    = None
         self.template_path = None
@@ -147,48 +148,95 @@ class StickerApp(ctk.CTk):
         self._build()
         self._init_builtin_templates()
 
+    def _fit_to_screen(self):
+        """Size the window to the working area so laptop screens keep the footer visible."""
+        self.update_idletasks()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        # Leave room for the Windows taskbar
+        w = min(820, max(680, sw - 80))
+        h = min(780, max(560, sh - 100))
+        x = max(20, (sw - w) // 2)
+        y = max(20, (sh - h) // 4)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
     # ── Build UI ──────────────────────────────────────────────────────────────
     def _build(self):
         # Header
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)
         hdr.pack(fill="x")
         inner = ctk.CTkFrame(hdr, fg_color="transparent")
-        inner.pack(padx=28, pady=16)
+        inner.pack(padx=20, pady=10)
 
-        icon_f = ctk.CTkFrame(inner, width=48, height=48,
-                              fg_color=TINT["mid"], corner_radius=12)
-        icon_f.pack(side="left", padx=(0, 14))
+        icon_f = ctk.CTkFrame(inner, width=40, height=40,
+                              fg_color=TINT["mid"], corner_radius=10)
+        icon_f.pack(side="left", padx=(0, 12))
         icon_f.pack_propagate(False)
         ctk.CTkLabel(icon_f, text="🏷️",
-                     font=ctk.CTkFont("Segoe UI Emoji", 22)
+                     font=ctk.CTkFont("Segoe UI Emoji", 18)
                      ).place(relx=0.5, rely=0.5, anchor="center")
 
         txt = ctk.CTkFrame(inner, fg_color="transparent")
         txt.pack(side="left")
         ctk.CTkLabel(txt, text="Sticker Format Tool",
-                     font=ctk.CTkFont("Segoe UI", 18, "bold"),
+                     font=ctk.CTkFont("Segoe UI", 16, "bold"),
                      text_color=C["text"]).pack(anchor="w")
-        ctk.CTkLabel(txt, text="Format Excel data into sticker sheets and generate PDFs",
+        ctk.CTkLabel(txt, text="Format Excel into sticker sheets and generate PDFs",
                      font=ctk.CTkFont("Segoe UI", 11),
                      text_color=C["muted"]).pack(anchor="w")
 
-        # Scrollable body
-        body = ctk.CTkScrollableFrame(self, fg_color="transparent",
-                                      scrollbar_button_color=C["border"])
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        # Sticky footer first so the Generate button is never clipped on laptops
+        footer = ctk.CTkFrame(
+            self, fg_color=C["card"], corner_radius=0,
+            border_width=1, border_color=C["border"],
+        )
+        footer.pack(side="bottom", fill="x")
+        fi = ctk.CTkFrame(footer, fg_color="transparent")
+        fi.pack(fill="x", padx=16, pady=10)
+
+        self.progress = ctk.CTkProgressBar(
+            fi, height=6, fg_color=C["hover"], progress_color=C["accent"],
+        )
+        self.progress.pack(fill="x", pady=(0, 6))
+        self.progress.set(0)
+
+        self.stat = ctk.CTkLabel(
+            fi, text="Ready — pick Excel, columns, and a template.",
+            font=ctk.CTkFont("Segoe UI", 11),
+            text_color=C["muted"], anchor="w",
+        )
+        self.stat.pack(fill="x", pady=(0, 8))
+
+        self.run_btn = ctk.CTkButton(
+            fi, text="🏷️  Generate Sticker Sheet + PDF",
+            font=ctk.CTkFont("Segoe UI", 14, "bold"),
+            fg_color=TINT["mid"], hover_color=TINT["bdr"],
+            text_color=C["accent"],
+            border_color=C["accent"], border_width=1,
+            corner_radius=24, height=42,
+            command=self._start,
+        )
+        self.run_btn.pack(fill="x")
+
+        # Scrollable body fills remaining space
+        body = ctk.CTkScrollableFrame(
+            self, fg_color="transparent",
+            scrollbar_button_color=C["border"],
+        )
+        body.pack(fill="both", expand=True, padx=16, pady=(8, 4))
 
         # ── Step 1: Excel file ──
         self._section(body, "Step 1 — Select your Excel file")
 
         file_card = ctk.CTkFrame(body, fg_color=C["card"], corner_radius=12,
                                  border_width=1, border_color=C["border"])
-        file_card.pack(fill="x", pady=(4, 10))
+        file_card.pack(fill="x", pady=(2, 8))
 
         self.excel_label = ctk.CTkLabel(
             file_card, text="No file selected",
             font=ctk.CTkFont("Segoe UI", 11),
             text_color=C["muted"], anchor="w")
-        self.excel_label.pack(side="left", padx=16, pady=12, fill="x", expand=True)
+        self.excel_label.pack(side="left", padx=14, pady=10, fill="x", expand=True)
 
         ctk.CTkButton(
             file_card, text="Browse",
@@ -197,31 +245,31 @@ class StickerApp(ctk.CTk):
             text_color=C["accent"], border_color=C["accent"], border_width=1,
             corner_radius=20, height=32, width=100,
             command=self._browse_excel
-        ).pack(side="right", padx=12, pady=8)
+        ).pack(side="right", padx=10, pady=8)
 
         # ── Step 2: Column selection (dynamic) ──
         self._section(body, "Step 2 — Select columns to include")
 
         self.col_frame = ctk.CTkFrame(body, fg_color=C["card"], corner_radius=12,
                                       border_width=1, border_color=C["border"])
-        self.col_frame.pack(fill="x", pady=(4, 10))
+        self.col_frame.pack(fill="x", pady=(2, 8))
 
         self.col_placeholder = ctk.CTkLabel(
             self.col_frame,
             text="Load an Excel file above to see available columns",
             font=ctk.CTkFont("Segoe UI", 11),
             text_color=C["faint"])
-        self.col_placeholder.pack(padx=16, pady=16)
+        self.col_placeholder.pack(padx=14, pady=12)
 
         # ── Step 3: Stickers per sheet ──
         self._section(body, "Step 3 — Stickers per sheet")
 
         sps_card = ctk.CTkFrame(body, fg_color=C["card"], corner_radius=12,
                                 border_width=1, border_color=C["border"])
-        sps_card.pack(fill="x", pady=(4, 10))
+        sps_card.pack(fill="x", pady=(2, 8))
 
         sps_inner = ctk.CTkFrame(sps_card, fg_color="transparent")
-        sps_inner.pack(fill="x", padx=16, pady=12)
+        sps_inner.pack(fill="x", padx=14, pady=10)
 
         ctk.CTkLabel(sps_inner, text="Stickers per sheet:",
                      font=ctk.CTkFont("Segoe UI", 12),
@@ -247,17 +295,17 @@ class StickerApp(ctk.CTk):
 
         tmpl_card = ctk.CTkFrame(body, fg_color=C["card"], corner_radius=12,
                                  border_width=1, border_color=C["border"])
-        tmpl_card.pack(fill="x", pady=(4, 10))
+        tmpl_card.pack(fill="x", pady=(2, 8))
 
         tmpl_inner = ctk.CTkFrame(tmpl_card, fg_color="transparent")
-        tmpl_inner.pack(fill="x", padx=16, pady=12)
+        tmpl_inner.pack(fill="x", padx=14, pady=10)
 
         ctk.CTkLabel(
             tmpl_inner,
             text="Built-in templates from New folder/ — pick one, or Browse for a custom .typ:",
             font=ctk.CTkFont("Segoe UI", 11),
-            text_color=C["muted"], anchor="w",
-        ).pack(fill="x", pady=(0, 8))
+            text_color=C["muted"], anchor="w", wraplength=680,
+        ).pack(fill="x", pady=(0, 6))
 
         row = ctk.CTkFrame(tmpl_inner, fg_color="transparent")
         row.pack(fill="x")
@@ -289,50 +337,39 @@ class StickerApp(ctk.CTk):
         self.tmpl_label = ctk.CTkLabel(
             tmpl_inner, text="No template selected",
             font=ctk.CTkFont("Segoe UI", 10),
-            text_color=C["faint"], anchor="w",
+            text_color=C["faint"], anchor="w", wraplength=680,
         )
-        self.tmpl_label.pack(fill="x", pady=(8, 0))
+        self.tmpl_label.pack(fill="x", pady=(6, 0))
 
-        # ── Progress & log ──
-        self._section(body, "Progress")
-
-        self.progress = ctk.CTkProgressBar(body, height=8,
-                                           fg_color=C["card"],
-                                           progress_color=C["accent"])
-        self.progress.pack(fill="x", pady=(4, 8))
-        self.progress.set(0)
-
-        self.log = ctk.CTkTextbox(body, height=140,
-                                  font=ctk.CTkFont("Courier New", 11),
-                                  fg_color=C["card"],
-                                  border_color=C["border"], border_width=1,
-                                  text_color=C["muted"],
-                                  state="disabled")
-        self.log.pack(fill="x", pady=(0, 16))
-
-        # ── Run button ──
-        self.run_btn = ctk.CTkButton(
-            body, text="🏷️  Generate Sticker Sheet + PDF",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"],
-            border_color=C["accent"], border_width=1,
-            corner_radius=24, height=48,
-            command=self._start)
-        self.run_btn.pack(fill="x", pady=(0, 20))
+        # ── Log (scrollable with the form; Generate stays pinned below) ──
+        self._section(body, "Log")
+        self.log = ctk.CTkTextbox(
+            body, height=120,
+            font=ctk.CTkFont("Courier New", 11),
+            fg_color=C["card"],
+            border_color=C["border"], border_width=1,
+            text_color=C["muted"],
+            state="disabled",
+        )
+        self.log.pack(fill="both", expand=True, pady=(2, 8))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _section(self, parent, text):
         ctk.CTkLabel(parent, text=text,
                      font=ctk.CTkFont("Segoe UI", 12, "bold"),
                      text_color=C["text"], anchor="w"
-                     ).pack(fill="x", pady=(14, 2))
+                     ).pack(fill="x", pady=(8, 2))
+
+    def _set_stat(self, msg, color=None):
+        self.stat.configure(text=msg, text_color=color or C["muted"])
 
     def _log(self, msg):
-        self.log.configure(state="normal")
-        self.log.insert("end", msg + "\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        def _append():
+            self.log.configure(state="normal")
+            self.log.insert("end", msg + "\n")
+            self.log.see("end")
+            self.log.configure(state="disabled")
+        self.after(0, _append)
 
     # ── File browsing ─────────────────────────────────────────────────────────
     def _browse_excel(self):
@@ -501,6 +538,7 @@ class StickerApp(ctk.CTk):
 
         self.run_btn.configure(state="disabled", text="Processing…")
         self.progress.set(0)
+        self._set_stat("Generating stickers…", C["accent"])
         threading.Thread(target=self._run, args=(selected,), daemon=True).start()
 
     def _run(self, selected_cols):
@@ -520,7 +558,7 @@ class StickerApp(ctk.CTk):
             excel_out = os.path.join(out_dir, "sticker_formatted.xlsx")
             final_df.to_excel(excel_out, index=False)
             self._log(f"✅  Formatted Excel saved → sticker_formatted.xlsx")
-            self.progress.set(0.5)
+            self.after(0, lambda: self.progress.set(0.5))
 
             # ── Step 2: Generate PDFs ──
             self._log(f"\nGenerating PDFs from template...")
@@ -531,30 +569,37 @@ class StickerApp(ctk.CTk):
                 self.template_path,
                 out_dir,
                 log_fn=self._log,
-                progress_fn=lambda v: self.progress.set(v)
+                progress_fn=lambda v: self.after(0, lambda x=v: self.progress.set(x)),
             )
 
             self._log(f"\n{'─' * 40}")
 
             if success:
                 self._log(f"✅  All done! Output saved to:\n    {out_dir}")
+                self.after(0, lambda: self._set_stat(
+                    "Done — sticker sheet and PDF saved.", C["accent"]))
                 import subprocess
                 subprocess.Popen(["explorer", out_dir])
-                messagebox.showinfo(
+                self.after(0, lambda: messagebox.showinfo(
                     "Complete",
-                    f"Sticker sheet and PDF generated successfully.\n\nSaved to:\n{out_dir}")
+                    f"Sticker sheet and PDF generated successfully.\n\nSaved to:\n{out_dir}"))
             else:
                 self._log("⚠️  Excel saved but PDF generation failed. Check the log.")
-                messagebox.showwarning(
+                self.after(0, lambda: self._set_stat(
+                    "Excel saved, but PDF generation failed.", "#ff375f"))
+                self.after(0, lambda: messagebox.showwarning(
                     "Partial Complete",
-                    f"Formatted Excel was saved but PDF generation failed.\n\nCheck the log for details.\n\nExcel saved to:\n{out_dir}")
+                    f"Formatted Excel was saved but PDF generation failed.\n\nCheck the log for details.\n\nExcel saved to:\n{out_dir}"))
 
         except Exception as e:
-            self._log(f"\n❌  Error: {e}")
-            messagebox.showerror("Error", str(e))
+            err = str(e)
+            self._log(f"\n❌  Error: {err}")
+            self.after(0, lambda: self._set_stat(f"Error: {err}", "#ff375f"))
+            self.after(0, lambda: messagebox.showerror("Error", err))
         finally:
-            self.run_btn.configure(state="normal", text="🏷️  Generate Sticker Sheet + PDF")
-            self.progress.set(1)
+            self.after(0, lambda: self.run_btn.configure(
+                state="normal", text="🏷️  Generate Sticker Sheet + PDF"))
+            self.after(0, lambda: self.progress.set(1))
 
 
 if __name__ == "__main__":

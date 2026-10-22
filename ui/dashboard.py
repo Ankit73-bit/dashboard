@@ -1,5 +1,12 @@
+import os
+import sys
 from tkinter import messagebox
 import customtkinter as ctk
+
+_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen
 
 from ui.theme import C, t
 from ui.data import GROUPS, SERVICES
@@ -14,9 +21,8 @@ class Dashboard(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Dashboard")
-        self.geometry("1120x730")
-        self.minsize(960, 620)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 1120, 730, min_w=960, min_h=620)
         self._build()
 
     def _build(self):

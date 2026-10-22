@@ -115,9 +115,9 @@ class TypstApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PDF Generation Pipeline")
-        self.geometry("900x820")
-        self.minsize(820, 700)
         self.configure(bg=self.BG)
+        from window_fit import fit_to_screen
+        fit_to_screen(self, 900, 760, min_w=820, min_h=600)
         self._control = None
         self._pipeline_running = False
         self._paused = False

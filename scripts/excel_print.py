@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime
 import pandas as pd
 from PyPDF2 import PdfReader
+from window_fit import fit_to_screen, add_run_footer
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -69,9 +70,8 @@ class ExcelPrintApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Excel-Based PDF Printer")
-        self.geometry("760x860")
-        self.resizable(False, False)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 760, 760)
         self.excel_path = None
         self.pdf_dir    = None
         self.col_vars   = {}
@@ -95,8 +95,25 @@ class ExcelPrintApp(ctk.CTk):
         ctk.CTkLabel(tc, text="Print PDFs in the exact order defined by an Excel list", font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"]).pack(anchor="w")
         ctk.CTkLabel(inn, text=f"🖨  {get_default_printer()}", font=ctk.CTkFont("Segoe UI", 10, "bold"), text_color=C["accent"]).pack(side="right", padx=(20, 0))
 
+        _, fi, self.progress, self.stat = add_run_footer(self, C, TINT)
+        btn_row = ctk.CTkFrame(fi, fg_color="transparent")
+        btn_row.pack(fill="x")
+        self.run_btn = ctk.CTkButton(btn_row, text="📋  Print in Excel Order",
+                                     font=ctk.CTkFont("Segoe UI", 14, "bold"),
+                                     fg_color=TINT["mid"], hover_color=TINT["bdr"],
+                                     text_color=C["accent"], border_color=C["accent"], border_width=1,
+                                     corner_radius=24, height=42, command=self._start)
+        self.run_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.pause_btn = ctk.CTkButton(btn_row, text="⏸  Pause",
+                                       font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                                       fg_color=C["card"], hover_color=C["hover"],
+                                       text_color=C["orange"], border_color=C["orange"], border_width=1,
+                                       corner_radius=24, height=42, width=130,
+                                       state="disabled", command=self._toggle_pause)
+        self.pause_btn.pack(side="right")
+
         body = ctk.CTkScrollableFrame(self, fg_color="transparent", scrollbar_button_color=C["border"])
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 8))
 
         # ── Step 1: Excel ──
         self._section(body, "Step 1 — Excel file with print order")
@@ -170,12 +187,8 @@ class ExcelPrintApp(ctk.CTk):
                                ).pack(side="left", padx=(0, 16))
         self.duplex_row.pack_forget()
 
-        # ── Progress ──
-        self._section(body, "Progress")
-        self.progress = ctk.CTkProgressBar(body, height=8, fg_color=C["card"], progress_color=C["accent"])
-        self.progress.pack(fill="x", pady=(4, 8))
-        self.progress.set(0)
-
+        # ── Status & log ──
+        self._section(body, "Status")
         stats = ctk.CTkFrame(body, fg_color="transparent")
         stats.pack(fill="x", pady=(0, 8))
         self.stat_total   = self._stat(stats, "Total",   "0", C["blue"])
@@ -187,22 +200,6 @@ class ExcelPrintApp(ctk.CTk):
                                   fg_color=C["card"], border_color=C["border"], border_width=1,
                                   text_color=C["muted"], state="disabled")
         self.log.pack(fill="x", pady=(0, 12))
-
-        btn_row = ctk.CTkFrame(body, fg_color="transparent")
-        btn_row.pack(fill="x", pady=(0, 20))
-        self.run_btn = ctk.CTkButton(btn_row, text="📋  Print in Excel Order",
-                                     font=ctk.CTkFont("Segoe UI", 14, "bold"),
-                                     fg_color=TINT["mid"], hover_color=TINT["bdr"],
-                                     text_color=C["accent"], border_color=C["accent"], border_width=1,
-                                     corner_radius=24, height=48, command=self._start)
-        self.run_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.pause_btn = ctk.CTkButton(btn_row, text="⏸  Pause",
-                                       font=ctk.CTkFont("Segoe UI", 13, "bold"),
-                                       fg_color=C["card"], hover_color=C["hover"],
-                                       text_color=C["orange"], border_color=C["orange"], border_width=1,
-                                       corner_radius=24, height=48, width=130,
-                                       state="disabled", command=self._toggle_pause)
-        self.pause_btn.pack(side="right")
 
     def _section(self, p, t):
         ctk.CTkLabel(p, text=t, font=ctk.CTkFont("Segoe UI", 12, "bold"),

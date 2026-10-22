@@ -12,6 +12,7 @@ from datetime import datetime
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from PyPDF2 import PdfMerger
+from window_fit import fit_to_screen
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -112,9 +113,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("PDF Merger")
-        self.geometry("780x760")
-        self.minsize(680, 640)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 780, 760, min_w=680, min_h=560)
         self._items = []  # (kind, path)
         self._build()
 

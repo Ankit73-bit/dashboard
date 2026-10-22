@@ -9,6 +9,7 @@ Performance notes (14k+ rows):
 """
 
 import os
+import sys
 import csv
 import threading
 import subprocess
@@ -26,6 +27,12 @@ except ImportError:
 
     PdfWriter = None
     PdfReader = None
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SCRIPTS = os.path.normpath(os.path.join(_HERE, "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -336,9 +343,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Matched PDF Merger")
-        self.geometry("780x820")
-        self.minsize(700, 640)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 780, 760, min_w=700, min_h=560)
         self._excel_folder = None
         self._source_paths = {k: None for k, _ in SOURCES}
         self._source_vars = {}

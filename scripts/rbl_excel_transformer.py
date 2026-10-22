@@ -21,6 +21,7 @@ from datetime import datetime
 import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+from window_fit import fit_to_screen, attach_panel_chrome
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -430,7 +431,7 @@ def check_barcodes(
     slots = detect_person_slots(df.columns)
     only = {1} if barcode_only_first_slot else None
     if barcode_only_first_slot:
-        log_fn("  🔍 Link-loan mode: barcodes only for slot _1 (name_1 / address_1)")
+        log_fn("  🔍 Barcodes only for slot _1 (name_1 / address_1)")
     needed = count_needed_barcodes(df, slots, only_indices=only)
 
     barcode_df = pd.read_excel(barcode_file, sheet_name=barcode_sheet, usecols=[0])
@@ -456,7 +457,7 @@ def transform_rbl_data(
     log_fn(f"  Person slots detected → {len(slots)}  (name_1 / address_1 …)")
     log_fn(f"  Sheet → {sheet_name}")
     if barcode_only_first_slot:
-        log_fn("  Barcode flag → only slot _1 will receive a barcode (link-loan mode)")
+        log_fn("  Barcode flag → only slot _1 (name_1) will receive a barcode")
 
     if not slots:
         raise ValueError(
@@ -752,14 +753,14 @@ def split_by_address_count(pivot_path, out_dir, log_fn):
 
 # ─── UI ────────────────────────────────────────────────────────────────────────
 
-class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
+class RBLExcelTransformerPanel(ctk.CTkFrame):
     COLS_PER_ROW = 3
 
     def __init__(self, parent, **kw):
-        super().__init__(
-            parent, fg_color="transparent",
-            scrollbar_button_color=C["border"], **kw,
-        )
+        kw.pop("scrollbar_button_color", None)
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._body, self._prog, self._stat, self._run_btn = attach_panel_chrome(
+            self, C, TINT, '▶  Run Pipeline', self._run)
         self._data_file = None
         self._barcode_file = None
         self._data_sheet = 0
@@ -771,13 +772,15 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._link_expand_vars = {}
         self._link_sum_vars = {}
         self._do_link_loan = ctk.BooleanVar(value=False)
+        # Default OFF = barcode every name_N slot; ON = only name_1 / slot _1
+        self._barcode_first_only = ctk.BooleanVar(value=False)
         self._first_col_var = ctk.StringVar(value="loan account no")
         self._max_grp_var = ctk.StringVar(value="2")
         self._build()
 
     def _build(self):
         banner = ctk.CTkFrame(
-            self, fg_color=TINT["bg"], corner_radius=10,
+            self._body, fg_color=TINT["bg"], corner_radius=10,
             border_width=1, border_color=C["accent"],
         )
         banner.pack(fill="x", pady=(4, 14))
@@ -788,7 +791,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         ).pack(anchor="w", padx=14, pady=8)
 
         self._sec("Step 1 — Select data file (name_1 / address_1 …)")
-        fr1 = ctk.CTkFrame(self, fg_color="transparent")
+        fr1 = ctk.CTkFrame(self._body, fg_color="transparent")
         fr1.pack(fill="x", pady=(0, 4))
         self._data_lbl = ctk.CTkLabel(
             fr1, text="No file selected",
@@ -802,7 +805,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
             text_color=C["text"], command=self._pick_data,
         ).pack(side="right")
 
-        sheet1 = ctk.CTkFrame(self, fg_color="transparent")
+        sheet1 = ctk.CTkFrame(self._body, fg_color="transparent")
         sheet1.pack(fill="x", pady=(0, 4))
         ctk.CTkLabel(
             sheet1, text="Data sheet",
@@ -821,14 +824,14 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._data_sheet_cb.pack(side="left", fill="x", expand=True)
 
         self._file_info = ctk.CTkLabel(
-            self, text="",
+            self._body, text="",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["blue"],
             anchor="w", wraplength=700, justify="left",
         )
         self._file_info.pack(anchor="w", pady=(2, 10))
 
         self._sec("Step 2 — Select barcode file / sheet")
-        fr2 = ctk.CTkFrame(self, fg_color="transparent")
+        fr2 = ctk.CTkFrame(self._body, fg_color="transparent")
         fr2.pack(fill="x", pady=(0, 4))
         self._barcode_lbl = ctk.CTkLabel(
             fr2, text="No file selected",
@@ -842,7 +845,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
             text_color=C["text"], command=self._pick_barcode,
         ).pack(side="right")
 
-        sheet2 = ctk.CTkFrame(self, fg_color="transparent")
+        sheet2 = ctk.CTkFrame(self._body, fg_color="transparent")
         sheet2.pack(fill="x", pady=(0, 4))
         ctk.CTkLabel(
             sheet2, text="Barcode sheet",
@@ -860,28 +863,28 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._barcode_sheet_cb.set("(load file first)")
         self._barcode_sheet_cb.pack(side="left", fill="x", expand=True)
         ctk.CTkLabel(
-            self,
+            self._body,
             text="Tip: sample_rbl_excel_transformer.xlsx has sheets Data + Barcodes — you can pick the same file twice.",
             font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
             anchor="w", wraplength=700, justify="left",
         ).pack(anchor="w", pady=(0, 6))
 
         self._barcode_info = ctk.CTkLabel(
-            self, text="",
+            self._body, text="",
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["faint"], anchor="w",
         )
         self._barcode_info.pack(anchor="w", pady=(2, 10))
 
         self._sec("Step 3 — Select columns to keep")
         ctk.CTkLabel(
-            self,
+            self._body,
             text="Numbered slots (name_1, address_1, name_2…) are handled automatically. "
                  "Tick the loan / notice columns to carry through.",
             font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
             anchor="w", wraplength=700, justify="left",
         ).pack(anchor="w", pady=(0, 4))
 
-        sa_row = ctk.CTkFrame(self, fg_color="transparent")
+        sa_row = ctk.CTkFrame(self._body, fg_color="transparent")
         sa_row.pack(anchor="w", pady=(0, 4))
         for label, val in [("Select all", True), ("Clear all", False)]:
             ctk.CTkButton(
@@ -893,7 +896,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
             ).pack(side="left", padx=(0, 8))
 
         self._col_grid = ctk.CTkFrame(
-            self, fg_color=C["card"], corner_radius=8,
+            self._body, fg_color=C["card"], corner_radius=8,
             border_width=1, border_color=C["border"],
         )
         self._col_grid.pack(fill="x", pady=(4, 10))
@@ -904,16 +907,16 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
 
         self._sec("Optional — Link loans (DLN)")
         ctk.CTkLabel(
-            self,
+            self._body,
             text="If DLN has link loans (same CUST_ID, multiple loan rows), enable this to "
                  "collapse them like Excel CUID Separator — but only the columns you tick "
                  "get _1, _2, … suffixes. Leave unchecked when there are no link loans. "
-                 "When enabled, barcodes are assigned only to slot _1 (not _2, _3, …).",
+                 "Turning this on also suggests barcodes only on name_1 (see Step 5).",
             font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
             anchor="w", wraplength=700, justify="left",
         ).pack(anchor="w", pady=(0, 4))
 
-        link_tog = ctk.CTkFrame(self, fg_color="transparent")
+        link_tog = ctk.CTkFrame(self._body, fg_color="transparent")
         link_tog.pack(fill="x", pady=(0, 4))
         ctk.CTkCheckBox(
             link_tog, text="Data has link loans",
@@ -930,7 +933,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._link_info_lbl.pack(side="left", padx=(16, 0))
 
         self._link_opts = ctk.CTkFrame(
-            self, fg_color=C["card"], corner_radius=8,
+            self._body, fg_color=C["card"], corner_radius=8,
             border_width=1, border_color=C["border"],
         )
         self._link_opts.pack(fill="x", pady=(4, 10))
@@ -1007,7 +1010,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._toggle_link_loan_ui()
 
         self._sec("Step 4 — Pivot options")
-        opt_row = ctk.CTkFrame(self, fg_color="transparent")
+        opt_row = ctk.CTkFrame(self._body, fg_color="transparent")
         opt_row.pack(fill="x", pady=(0, 12))
         ctk.CTkLabel(
             opt_row, text="First column in output:",
@@ -1034,8 +1037,8 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._grp_det_lbl.pack(side="left")
 
         self._sec("Step 5 — Pipeline steps to run")
-        tog_row = ctk.CTkFrame(self, fg_color="transparent")
-        tog_row.pack(fill="x", pady=(0, 12))
+        tog_row = ctk.CTkFrame(self._body, fg_color="transparent")
+        tog_row.pack(fill="x", pady=(0, 4))
         self._do_barcode = ctk.BooleanVar(value=True)
         self._do_pivot = ctk.BooleanVar(value=True)
         self._do_split = ctk.BooleanVar(value=True)
@@ -1051,32 +1054,27 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
                 border_color=C["border"], checkmark_color="#000",
             ).pack(side="left", padx=(0, 24))
 
-        self._sec("Run")
-        self._run_btn = ctk.CTkButton(
-            self, text="▶  Run Pipeline",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["bg"], hover_color=TINT["mid"],
-            border_color=C["accent"], border_width=1,
-            text_color=C["accent"], height=44,
-            command=self._run,
-        )
-        self._run_btn.pack(fill="x", pady=(0, 10))
+        bc_opt = ctk.CTkFrame(self._body, fg_color="transparent")
+        bc_opt.pack(fill="x", pady=(0, 12))
+        ctk.CTkCheckBox(
+            bc_opt,
+            text="Barcode only on name_1 (skip name_2, name_3, …)",
+            variable=self._barcode_first_only,
+            font=ctk.CTkFont("Segoe UI", 12), text_color=C["text"],
+            fg_color=C["accent"], hover_color=TINT["bdr"],
+            border_color=C["border"], checkmark_color="#000",
+            command=self._on_barcode_first_only_change,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            bc_opt,
+            text="  Default off = barcode every address slot",
+            font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
+        ).pack(side="left")
 
-        self._prog = ctk.CTkProgressBar(
-            self, fg_color=C["card"], progress_color=C["accent"], height=8,
-        )
-        self._prog.set(0)
-        self._prog.pack(fill="x", pady=(0, 4))
-
-        self._stat = ctk.CTkLabel(
-            self, text="Ready.",
-            font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"], anchor="w",
-        )
-        self._stat.pack(fill="x", pady=(0, 10))
 
         self._sec("Log")
         self._log_box = ctk.CTkTextbox(
-            self, height=220, fg_color=C["card"],
+            self._body, height=220, fg_color=C["card"],
             border_color=C["border"], border_width=1,
             text_color=C["text"], font=ctk.CTkFont("Consolas", 11),
         )
@@ -1084,7 +1082,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
 
     def _sec(self, t):
         ctk.CTkLabel(
-            self, text=t.upper(),
+            self._body, text=t.upper(),
             font=ctk.CTkFont("Segoe UI", 10, "bold"),
             text_color=C["muted"],
         ).pack(anchor="w", pady=(8, 3))
@@ -1108,6 +1106,14 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         for var in self._link_sum_vars.values():
             var.set(value)
 
+    def _barcode_only_first_slot(self):
+        """True when user asked for barcodes only on name_1 / slot _1."""
+        return bool(self._barcode_first_only.get())
+
+    def _on_barcode_first_only_change(self):
+        if self._data_file and self._barcode_file:
+            self._async_barcode_check()
+
     def _toggle_link_loan_ui(self):
         enabled = bool(self._do_link_loan.get())
         state = "normal" if enabled else "disabled"
@@ -1124,6 +1130,9 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         self._link_opts.configure(
             border_color=C["accent"] if enabled else C["border"],
         )
+        # Link-loan jobs usually need only one barcode per customer (name_1)
+        if enabled and not self._barcode_first_only.get():
+            self._barcode_first_only.set(True)
         if self._data_file and self._barcode_file:
             self._async_barcode_check()
 
@@ -1371,6 +1380,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
         if data_sheet == "(csv)":
             data_sheet = 0
         do_link = bool(self._do_link_loan.get())
+        first_only = self._barcode_only_first_slot()
         link_groupby = self._link_groupby_cb.get() if do_link else None
         if link_groupby in (None, "(load file first)", "(none)"):
             link_groupby = None
@@ -1380,11 +1390,11 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
                 needed, available = check_barcodes(
                     self._data_file, self._barcode_file, lambda *_: None,
                     data_sheet=data_sheet, barcode_sheet=barcode_sheet,
-                    barcode_only_first_slot=do_link,
+                    barcode_only_first_slot=first_only,
                     link_groupby=link_groupby if do_link else None,
                 )
                 spare = available - needed
-                suffix = " (link-loan: slot _1 only)" if do_link else ""
+                suffix = " (slot _1 / name_1 only)" if first_only else ""
                 summary = (
                     f"✅  {available:,} barcodes available,  "
                     f"{needed:,} needed  ({spare:,} spare){suffix}"
@@ -1501,6 +1511,10 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
                 )
             else:
                 self._log("🔗 Link loans:   OFF")
+            first_only = self._barcode_only_first_slot()
+            self._log(
+                f"🏷️  Barcodes:    {'name_1 only' if first_only else 'all slots (name_1, name_2, …)'}"
+            )
             self._log("")
 
             data_path = self._data_file
@@ -1529,7 +1543,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
                 check_barcodes(
                     data_path, self._barcode_file, self._log,
                     data_sheet=transform_sheet, barcode_sheet=barcode_sheet,
-                    barcode_only_first_slot=do_link,
+                    barcode_only_first_slot=first_only,
                     link_groupby=None,
                 )
                 self._log("")
@@ -1538,7 +1552,7 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
             transform_rbl_data(
                 data_path, out_dir, selected_cols, self._log,
                 sheet_name=transform_sheet,
-                barcode_only_first_slot=do_link,
+                barcode_only_first_slot=first_only,
             )
             advance("✔ Transform complete")
 
@@ -1548,8 +1562,8 @@ class RBLExcelTransformerPanel(ctk.CTkScrollableFrame):
 
             if do_barcode:
                 self._log("\n🏷️  Step 3 — Insert barcodes…")
-                if do_link:
-                    self._log("  (Link-loan: barcodes only on slot _1)")
+                if first_only:
+                    self._log("  (Barcodes only on name_1 / slot _1)")
                 insert_barcodes(
                     sticker_path, self._barcode_file, self._log,
                     barcode_sheet=barcode_sheet,
@@ -1595,7 +1609,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("RBL Excel Transformer")
-        self.geometry("820x820")
+        fit_to_screen(self, 820, 760)
         self.configure(fg_color=C["bg"])
 
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)

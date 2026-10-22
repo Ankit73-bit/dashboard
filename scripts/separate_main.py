@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+from window_fit import fit_to_screen
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -92,9 +93,8 @@ class ExcelCuidSeparatorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Excel CUID Separator")
-        self.geometry("820x700")
-        self.minsize(700, 520)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 820, 700, min_w=700, min_h=520)
         self._file_path = None
         self._columns = []
         self._date_vars = {}

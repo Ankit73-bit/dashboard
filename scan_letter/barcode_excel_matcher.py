@@ -19,6 +19,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+_SCRIPTS = os.path.normpath(os.path.join(_HERE, "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen, add_run_footer, add_primary_run_button
+
 try:
     import match as matcher  # noqa: E402
 except ModuleNotFoundError:
@@ -127,8 +132,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Barcode Excel Matcher")
-        self.geometry("760x640")
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 760, 640)
         self._pdf_folder = None
         self._excel_folder = None
         self._build()
@@ -142,11 +147,15 @@ class App(ctk.CTk):
                      font=ctk.CTkFont("Segoe UI", 18, "bold"),
                      text_color=C["text"]).pack(anchor="w")
         ctk.CTkLabel(inn, text="Scan Step 2 — exact match PDFs to Excel barcodes",
-                     font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"]).pack(anchor="w")
+                     font=ctk.CTkFont("Segoe UI", 11),                      text_color=C["muted"]).pack(anchor="w")
+
+        _, fi, self._prog, self._stat = add_run_footer(self, C, TINT)
+        self._run_btn = add_primary_run_button(
+            fi, "▶  Match Barcodes", self._start, C, TINT)
 
         body = ctk.CTkScrollableFrame(self, fg_color="transparent",
                                       scrollbar_button_color=C["border"])
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 8))
 
         banner = ctk.CTkFrame(body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
@@ -171,25 +180,10 @@ class App(ctk.CTk):
             justify="left", anchor="w"
         ).pack(anchor="w", padx=14, pady=10)
 
-        self._prog = ctk.CTkProgressBar(body, height=8, fg_color=C["card"],
-                                        progress_color=C["accent"])
-        self._prog.pack(fill="x", pady=(4, 6))
-        self._prog.set(0)
-        self._stat = ctk.CTkLabel(body, text="Ready.", font=ctk.CTkFont("Segoe UI", 11),
-                                  text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 6))
         self._log = ctk.CTkTextbox(body, height=220, font=ctk.CTkFont("Courier New", 11),
                                    fg_color=C["card"], border_color=C["border"],
                                    border_width=1, text_color=C["muted"], state="disabled")
         self._log.pack(fill="x", pady=(0, 12))
-
-        self._run_btn = ctk.CTkButton(
-            body, text="▶  Match Barcodes",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"], border_color=C["accent"], border_width=1,
-            corner_radius=24, height=46, command=self._start)
-        self._run_btn.pack(fill="x", pady=(0, 16))
 
     def _folder_row(self, parent, title, lbl_attr, cmd):
         ctk.CTkLabel(parent, text=title, font=ctk.CTkFont("Segoe UI", 12, "bold"),

@@ -6,6 +6,7 @@ Embeddable Panel + standalone window.
 """
 
 import os
+import sys
 import shutil
 import threading
 import subprocess
@@ -15,6 +16,11 @@ from datetime import datetime
 import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+
+_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen, attach_panel_chrome
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -53,11 +59,13 @@ def _check_pillow():
 
 # ─── Embeddable Panel Content ─────────────────────────────────────────────────
 
-class PhotoRenamerPanelContent(ctk.CTkScrollableFrame):
+class PhotoRenamerPanelContent(ctk.CTkFrame):
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color="transparent",
-                         scrollbar_button_color=C["border"], **kw)
+        kw.pop("scrollbar_button_color", None)
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._body, self._prog, self._stat, self._run_btn = attach_panel_chrome(
+            self, C, TINT, '▶  Rename & Convert', self._run)
         self._data_file     = None
         self._photos_folder = None
         self._df            = None
@@ -67,7 +75,7 @@ class PhotoRenamerPanelContent(ctk.CTkScrollableFrame):
     def _build(self):
         # Dependency warning
         if not _check_pillow():
-            warn = ctk.CTkFrame(self, fg_color="#300a14", corner_radius=10,
+            warn = ctk.CTkFrame(self._body, fg_color="#300a14", corner_radius=10,
                                 border_width=1, border_color=C["red"])
             warn.pack(fill="x", pady=(4, 10))
             ctk.CTkLabel(warn,
@@ -76,7 +84,7 @@ class PhotoRenamerPanelContent(ctk.CTkScrollableFrame):
                          text_color=C["red"]).pack(anchor="w", padx=14, pady=8)
 
         # Output banner
-        banner = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=10,
+        banner = ctk.CTkFrame(self._body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
         banner.pack(fill="x", pady=(4, 14))
         ctk.CTkLabel(banner,
@@ -86,7 +94,7 @@ class PhotoRenamerPanelContent(ctk.CTkScrollableFrame):
 
         # Step 1 — Data file
         self._sec("Step 1 — Select Excel / CSV data file")
-        dr = ctk.CTkFrame(self, fg_color="transparent")
+        dr = ctk.CTkFrame(self._body, fg_color="transparent")
         dr.pack(fill="x", pady=(0, 4))
         self._data_lbl = ctk.CTkLabel(
             dr, text="No file selected",
@@ -100,7 +108,7 @@ class PhotoRenamerPanelContent(ctk.CTkScrollableFrame):
                       command=self._pick_data).pack(side="right")
 
         self._cols_hint = ctk.CTkLabel(
-            self, text="",
+            self._body, text="",
             font=ctk.CTkFont("Segoe UI", 10),
             text_color=C["faint"], anchor="w",
             justify="left", wraplength=560)
@@ -108,7 +116,7 @@ class PhotoRenamerPanelContent(ctk.CTkScrollableFrame):
 
         # Step 2 — ID column
         self._sec("Step 2 — Employee ID column")
-        col_row = ctk.CTkFrame(self, fg_color="transparent")
+        col_row = ctk.CTkFrame(self._body, fg_color="transparent")
         col_row.pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(col_row, text="Column:",
                      font=ctk.CTkFont("Segoe UI", 11),
@@ -122,7 +130,7 @@ class PhotoRenamerPanelContent(ctk.CTkScrollableFrame):
 
         # Step 3 — Photos folder
         self._sec("Step 3 — Photos folder")
-        pr = ctk.CTkFrame(self, fg_color="transparent")
+        pr = ctk.CTkFrame(self._body, fg_color="transparent")
         pr.pack(fill="x", pady=(0, 10))
         self._photos_lbl = ctk.CTkLabel(
             pr, text="No folder selected",
@@ -135,38 +143,16 @@ class PhotoRenamerPanelContent(ctk.CTkScrollableFrame):
                       text_color=C["text"],
                       command=self._pick_photos).pack(side="right")
 
-        # Step 4 — Run
-        self._sec("Step 4 — Run")
-        self._run_btn = ctk.CTkButton(
-            self, text="▶  Rename & Convert",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["bg"], hover_color=TINT["mid"],
-            border_color=C["accent"], border_width=1,
-            text_color=C["accent"], height=44,
-            command=self._run)
-        self._run_btn.pack(fill="x", pady=(0, 10))
-
-        self._prog = ctk.CTkProgressBar(
-            self, fg_color=C["card"], progress_color=C["accent"], height=8)
-        self._prog.set(0)
-        self._prog.pack(fill="x", pady=(0, 4))
-
-        self._stat = ctk.CTkLabel(
-            self, text="Ready.",
-            font=ctk.CTkFont("Segoe UI", 11),
-            text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 10))
-
         # Log
         self._sec("Log")
         self._log_box = ctk.CTkTextbox(
-            self, height=220, fg_color=C["card"],
+            self._body, height=220, fg_color=C["card"],
             border_color=C["border"], border_width=1,
             text_color=C["text"], font=ctk.CTkFont("Consolas", 11))
         self._log_box.pack(fill="both", expand=True, pady=(0, 16))
 
     def _sec(self, t):
-        ctk.CTkLabel(self, text=t.upper(),
+        ctk.CTkLabel(self._body, text=t.upper(),
                      font=ctk.CTkFont("Segoe UI", 10, "bold"),
                      text_color=C["muted"]).pack(anchor="w", pady=(8, 3))
 
@@ -367,7 +353,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Photo Renamer")
-        self.geometry("800x780")
+        fit_to_screen(self, 800, 760)
         self.configure(fg_color=C["bg"])
 
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)

@@ -15,6 +15,7 @@ from datetime import datetime
 import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+from window_fit import fit_to_screen, attach_panel_chrome
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -92,12 +93,14 @@ def json_to_tabular(json_path):
 
 # ─── Embeddable Panel Content ─────────────────────────────────────────────────
 
-class ExcelJsonConverterPanelContent(ctk.CTkScrollableFrame):
+class ExcelJsonConverterPanelContent(ctk.CTkFrame):
     """The actual tool UI — mode-switchable, embeddable."""
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color="transparent",
-                         scrollbar_button_color=C["border"], **kw)
+        kw.pop("scrollbar_button_color", None)
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._body, self._prog, self._stat, self._run_btn = attach_panel_chrome(
+            self, C, TINT, '▶  Convert', self._run)
         self._file_path = None
         self._mode      = ctk.StringVar(value="excel_to_json")
         self._build()
@@ -105,7 +108,7 @@ class ExcelJsonConverterPanelContent(ctk.CTkScrollableFrame):
     # ── Build ──────────────────────────────────────────────────────────────────
     def _build(self):
         # Mode toggle
-        toggle = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=12,
+        toggle = ctk.CTkFrame(self._body, fg_color=C["card"], corner_radius=12,
                               border_width=1, border_color=C["border"])
         toggle.pack(fill="x", pady=(4, 14))
 
@@ -128,7 +131,7 @@ class ExcelJsonConverterPanelContent(ctk.CTkScrollableFrame):
             ).pack(side="left", padx=(0, 24))
 
         # Output banner
-        self._out_banner = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=10,
+        self._out_banner = ctk.CTkFrame(self._body, fg_color=TINT["bg"], corner_radius=10,
                                         border_width=1, border_color=C["accent"])
         self._out_banner.pack(fill="x", pady=(0, 12))
         self._out_lbl = ctk.CTkLabel(
@@ -139,7 +142,7 @@ class ExcelJsonConverterPanelContent(ctk.CTkScrollableFrame):
 
         # Step 1 — File picker
         self._sec("Step 1 — Select file")
-        fr = ctk.CTkFrame(self, fg_color="transparent")
+        fr = ctk.CTkFrame(self._body, fg_color="transparent")
         fr.pack(fill="x", pady=(0, 10))
         self._file_lbl = ctk.CTkLabel(fr, text="No file selected",
                                       font=ctk.CTkFont("Segoe UI", 12),
@@ -152,35 +155,14 @@ class ExcelJsonConverterPanelContent(ctk.CTkScrollableFrame):
 
         # Step 2 — Options (mode-specific, rebuilt on toggle)
         self._sec("Step 2 — Options")
-        self._opts_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._opts_frame = ctk.CTkFrame(self._body, fg_color="transparent")
         self._opts_frame.pack(fill="x", pady=(0, 4))
         self._build_opts()
-
-        # Step 3 — Run
-        self._sec("Step 3 — Convert")
-        self._run_btn = ctk.CTkButton(
-            self, text="▶  Convert",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["bg"], hover_color=TINT["mid"],
-            border_color=C["accent"], border_width=1,
-            text_color=C["accent"], height=44,
-            command=self._run)
-        self._run_btn.pack(fill="x", pady=(0, 10))
-
-        self._prog = ctk.CTkProgressBar(self, fg_color=C["card"],
-                                        progress_color=C["accent"], height=8)
-        self._prog.set(0)
-        self._prog.pack(fill="x", pady=(0, 4))
-
-        self._stat = ctk.CTkLabel(self, text="Ready.",
-                                  font=ctk.CTkFont("Segoe UI", 11),
-                                  text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 10))
 
         # Log
         self._sec("Log")
         self._log_box = ctk.CTkTextbox(
-            self, height=200, fg_color=C["card"],
+            self._body, height=200, fg_color=C["card"],
             border_color=C["border"], border_width=1,
             text_color=C["text"], font=ctk.CTkFont("Consolas", 11))
         self._log_box.pack(fill="both", expand=True, pady=(0, 16))
@@ -236,7 +218,7 @@ class ExcelJsonConverterPanelContent(ctk.CTkScrollableFrame):
 
     # ── Helpers ────────────────────────────────────────────────────────────────
     def _sec(self, t):
-        ctk.CTkLabel(self, text=t.upper(),
+        ctk.CTkLabel(self._body, text=t.upper(),
                      font=ctk.CTkFont("Segoe UI", 10, "bold"),
                      text_color=C["muted"]).pack(anchor="w", pady=(8, 3))
 
@@ -361,7 +343,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Excel ↔ JSON Converter")
-        self.geometry("800x760")
+        fit_to_screen(self, 800, 760)
         self.configure(fg_color=C["bg"])
 
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)

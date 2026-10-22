@@ -5,6 +5,7 @@ Embeddable Panel + standalone window.
 """
 
 import os
+import sys
 import shutil
 import threading
 import subprocess
@@ -12,6 +13,11 @@ from datetime import datetime
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+
+_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen, attach_panel_chrome
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -37,18 +43,20 @@ def get_output_dir():
 
 # ─── Embeddable Panel Content ─────────────────────────────────────────────────
 
-class MissingPhotosPanelContent(ctk.CTkScrollableFrame):
+class MissingPhotosPanelContent(ctk.CTkFrame):
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color="transparent",
-                         scrollbar_button_color=C["border"], **kw)
+        kw.pop("scrollbar_button_color", None)
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._body, self._prog, self._stat, self._run_btn = attach_panel_chrome(
+            self, C, TINT, '▶  Find & Copy Missing', self._run)
         self._source_folder = None
         self._edited_folder = None
         self._build()
 
     def _build(self):
         # Output banner
-        banner = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=10,
+        banner = ctk.CTkFrame(self._body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
         banner.pack(fill="x", pady=(4, 14))
         ctk.CTkLabel(banner,
@@ -57,7 +65,7 @@ class MissingPhotosPanelContent(ctk.CTkScrollableFrame):
                      text_color=C["accent"]).pack(anchor="w", padx=14, pady=8)
 
         # Info note
-        note = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=8,
+        note = ctk.CTkFrame(self._body, fg_color=C["card"], corner_radius=8,
                             border_width=1, border_color=C["border"])
         note.pack(fill="x", pady=(0, 12))
         ctk.CTkLabel(note,
@@ -68,7 +76,7 @@ class MissingPhotosPanelContent(ctk.CTkScrollableFrame):
 
         # Step 1 — Source folder
         self._sec("Step 1 — SOURCE folder (original / unedited)")
-        sr = ctk.CTkFrame(self, fg_color="transparent")
+        sr = ctk.CTkFrame(self._body, fg_color="transparent")
         sr.pack(fill="x", pady=(0, 10))
         self._src_lbl = ctk.CTkLabel(
             sr, text="No folder selected",
@@ -83,7 +91,7 @@ class MissingPhotosPanelContent(ctk.CTkScrollableFrame):
 
         # Step 2 — Edited folder
         self._sec("Step 2 — EDITED folder (processed / output)")
-        er = ctk.CTkFrame(self, fg_color="transparent")
+        er = ctk.CTkFrame(self._body, fg_color="transparent")
         er.pack(fill="x", pady=(0, 10))
         self._edited_lbl = ctk.CTkLabel(
             er, text="No folder selected",
@@ -96,38 +104,16 @@ class MissingPhotosPanelContent(ctk.CTkScrollableFrame):
                       text_color=C["text"],
                       command=self._pick_edited).pack(side="right")
 
-        # Step 3 — Run
-        self._sec("Step 3 — Run")
-        self._run_btn = ctk.CTkButton(
-            self, text="▶  Find & Copy Missing",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["bg"], hover_color=TINT["mid"],
-            border_color=C["accent"], border_width=1,
-            text_color=C["accent"], height=44,
-            command=self._run)
-        self._run_btn.pack(fill="x", pady=(0, 10))
-
-        self._prog = ctk.CTkProgressBar(
-            self, fg_color=C["card"], progress_color=C["accent"], height=8)
-        self._prog.set(0)
-        self._prog.pack(fill="x", pady=(0, 4))
-
-        self._stat = ctk.CTkLabel(
-            self, text="Ready.",
-            font=ctk.CTkFont("Segoe UI", 11),
-            text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 10))
-
         # Log
         self._sec("Log")
         self._log_box = ctk.CTkTextbox(
-            self, height=200, fg_color=C["card"],
+            self._body, height=200, fg_color=C["card"],
             border_color=C["border"], border_width=1,
             text_color=C["text"], font=ctk.CTkFont("Consolas", 11))
         self._log_box.pack(fill="both", expand=True, pady=(0, 16))
 
     def _sec(self, t):
-        ctk.CTkLabel(self, text=t.upper(),
+        ctk.CTkLabel(self._body, text=t.upper(),
                      font=ctk.CTkFont("Segoe UI", 10, "bold"),
                      text_color=C["muted"]).pack(anchor="w", pady=(8, 3))
 
@@ -234,7 +220,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Missing Photos")
-        self.geometry("800x680")
+        fit_to_screen(self, 800, 680)
         self.configure(fg_color=C["bg"])
 
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)

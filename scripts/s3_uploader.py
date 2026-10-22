@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
+from window_fit import fit_to_screen, add_run_footer, add_primary_run_button
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -88,9 +89,8 @@ class S3UploaderApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("S3 File Uploader")
-        self.geometry("780x900")
-        self.resizable(False, False)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 780, 760)
 
         # State
         self.all_files   = []   # full list of resolved file paths
@@ -133,10 +133,14 @@ class S3UploaderApp(ctk.CTk):
                      text_color=badge_color
                      ).pack(side="right", padx=(20, 0))
 
+        _, fi, self.progress, self.stat = add_run_footer(self, C, TINT)
+        self.run_btn = add_primary_run_button(
+            fi, "☁️  Upload to S3", self._start, C, TINT)
+
         # Scrollable body
         body = ctk.CTkScrollableFrame(self, fg_color="transparent",
                                       scrollbar_button_color=C["border"])
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 8))
 
         # ── Step 1: Add files / folders ──
         self._section(body, "Step 1 — Add files or folders")
@@ -230,14 +234,8 @@ class S3UploaderApp(ctk.CTk):
                      text_color=C["faint"], anchor="w"
                      ).pack(fill="x", padx=16, pady=(0, 10))
 
-        # ── Progress & log ──
-        self._section(body, "Progress")
-
-        self.progress = ctk.CTkProgressBar(body, height=8,
-                                           fg_color=C["card"],
-                                           progress_color=C["accent"])
-        self.progress.pack(fill="x", pady=(4, 8))
-        self.progress.set(0)
+        # ── Stats & log ──
+        self._section(body, "Status")
 
         # Stats row
         stats_row = ctk.CTkFrame(body, fg_color="transparent")
@@ -254,18 +252,7 @@ class S3UploaderApp(ctk.CTk):
                                   border_color=C["border"], border_width=1,
                                   text_color=C["muted"],
                                   state="disabled")
-        self.log.pack(fill="x", pady=(0, 16))
-
-        # ── Upload button ──
-        self.run_btn = ctk.CTkButton(
-            body, text="☁️  Upload to S3",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"],
-            border_color=C["accent"], border_width=1,
-            corner_radius=24, height=48,
-            command=self._start)
-        self.run_btn.pack(fill="x", pady=(0, 20))
+        self.log.pack(fill="x", pady=(0, 12))
 
     # ─── UI helpers ───────────────────────────────────────────────────────────
     def _section(self, parent, text):

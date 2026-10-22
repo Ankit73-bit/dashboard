@@ -5,6 +5,7 @@ Embeddable Panel + standalone window.
 """
 
 import os
+import sys
 import threading
 import subprocess
 from pathlib import Path
@@ -12,6 +13,11 @@ from datetime import datetime
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+
+_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen, attach_panel_chrome
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -81,17 +87,19 @@ def _convert_bw(src_path, dst_path):
 
 # ─── Embeddable Panel Content ─────────────────────────────────────────────────
 
-class BwConverterPanelContent(ctk.CTkScrollableFrame):
+class BwConverterPanelContent(ctk.CTkFrame):
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color="transparent",
-                         scrollbar_button_color=C["border"], **kw)
+        kw.pop("scrollbar_button_color", None)
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._body, self._prog, self._stat, self._run_btn = attach_panel_chrome(
+            self, C, TINT, '▶  Convert to B&W', self._run)
         self._source_path = None   # file or folder
         self._build()
 
     def _build(self):
         if not _check_pillow():
-            warn = ctk.CTkFrame(self, fg_color="#300a14", corner_radius=10,
+            warn = ctk.CTkFrame(self._body, fg_color="#300a14", corner_radius=10,
                                 border_width=1, border_color=C["red"])
             warn.pack(fill="x", pady=(4, 10))
             ctk.CTkLabel(warn,
@@ -100,7 +108,7 @@ class BwConverterPanelContent(ctk.CTkScrollableFrame):
                          text_color=C["red"]).pack(anchor="w", padx=14, pady=8)
 
         # Output banner
-        banner = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=10,
+        banner = ctk.CTkFrame(self._body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
         banner.pack(fill="x", pady=(4, 14))
         ctk.CTkLabel(banner,
@@ -109,7 +117,7 @@ class BwConverterPanelContent(ctk.CTkScrollableFrame):
                      text_color=C["accent"]).pack(anchor="w", padx=14, pady=8)
 
         # Info note
-        note = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=8,
+        note = ctk.CTkFrame(self._body, fg_color=C["card"], corner_radius=8,
                             border_width=1, border_color=C["border"])
         note.pack(fill="x", pady=(0, 12))
         ctk.CTkLabel(note,
@@ -119,7 +127,7 @@ class BwConverterPanelContent(ctk.CTkScrollableFrame):
 
         # Step 1 — Mode
         self._sec("Step 1 — Mode")
-        mode_row = ctk.CTkFrame(self, fg_color="transparent")
+        mode_row = ctk.CTkFrame(self._body, fg_color="transparent")
         mode_row.pack(fill="x", pady=(0, 10))
         self._mode_var = ctk.StringVar(value="folder")
         for lbl, val in [("Single image", "single"), ("Folder of images", "folder")]:
@@ -133,7 +141,7 @@ class BwConverterPanelContent(ctk.CTkScrollableFrame):
 
         # Step 2 — Source
         self._sec("Step 2 — Select source")
-        sr = ctk.CTkFrame(self, fg_color="transparent")
+        sr = ctk.CTkFrame(self._body, fg_color="transparent")
         sr.pack(fill="x", pady=(0, 10))
         self._src_lbl = ctk.CTkLabel(
             sr, text="Nothing selected",
@@ -145,38 +153,16 @@ class BwConverterPanelContent(ctk.CTkScrollableFrame):
                       border_color=C["border"], border_width=1,
                       text_color=C["text"], command=self._pick).pack(side="right")
 
-        # Step 3 — Run
-        self._sec("Step 3 — Run")
-        self._run_btn = ctk.CTkButton(
-            self, text="▶  Convert to B&W",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["bg"], hover_color=TINT["mid"],
-            border_color=C["accent"], border_width=1,
-            text_color=C["accent"], height=44,
-            command=self._run)
-        self._run_btn.pack(fill="x", pady=(0, 10))
-
-        self._prog = ctk.CTkProgressBar(
-            self, fg_color=C["card"], progress_color=C["accent"], height=8)
-        self._prog.set(0)
-        self._prog.pack(fill="x", pady=(0, 4))
-
-        self._stat = ctk.CTkLabel(
-            self, text="Ready.",
-            font=ctk.CTkFont("Segoe UI", 11),
-            text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 10))
-
         # Log
         self._sec("Log")
         self._log_box = ctk.CTkTextbox(
-            self, height=200, fg_color=C["card"],
+            self._body, height=200, fg_color=C["card"],
             border_color=C["border"], border_width=1,
             text_color=C["text"], font=ctk.CTkFont("Consolas", 11))
         self._log_box.pack(fill="both", expand=True, pady=(0, 16))
 
     def _sec(self, txt):
-        ctk.CTkLabel(self, text=txt.upper(),
+        ctk.CTkLabel(self._body, text=txt.upper(),
                      font=ctk.CTkFont("Segoe UI", 10, "bold"),
                      text_color=C["muted"]).pack(anchor="w", pady=(8, 3))
 
@@ -279,7 +265,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Photo B&W Converter")
-        self.geometry("800x680")
+        fit_to_screen(self, 800, 680)
         self.configure(fg_color=C["bg"])
 
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)

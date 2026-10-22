@@ -19,6 +19,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
 from PyPDF2 import PdfMerger
+from window_fit import fit_to_screen, add_run_footer
 try:
     from PyPDF2 import PdfReader, PdfWriter
 except ImportError:  # older PyPDF2
@@ -1108,8 +1109,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("UCP Format PDF")
-        self.geometry("780x820")
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 780, 760)
         self._path = None
         self._chunk_run_dir = None
         self._columns = []
@@ -1131,10 +1132,31 @@ class App(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"],
         ).pack(anchor="w")
 
+        _, fi, self._prog, self._stat = add_run_footer(self, C, TINT)
+        btn_row = ctk.CTkFrame(fi, fg_color="transparent")
+        btn_row.pack(fill="x")
+        self._run_btn = ctk.CTkButton(
+            btn_row, text="▶  Generate UCP PDFs",
+            font=ctk.CTkFont("Segoe UI", 14, "bold"),
+            fg_color=TINT["mid"], hover_color=TINT["bdr"],
+            text_color=C["accent"], border_color=C["accent"], border_width=1,
+            corner_radius=24, height=42, command=self._start,
+        )
+        self._run_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self._cancel_btn = ctk.CTkButton(
+            btn_row, text="Cancel", width=120,
+            font=ctk.CTkFont("Segoe UI", 13, "bold"),
+            fg_color=C["card"], hover_color="#3a1520",
+            text_color=C["red"], border_color=C["red"], border_width=1,
+            corner_radius=24, height=42, state="disabled",
+            command=self._cancel,
+        )
+        self._cancel_btn.pack(side="right")
+
         body = ctk.CTkScrollableFrame(
             self, fg_color="transparent", scrollbar_button_color=C["border"],
         )
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 8))
 
         banner = ctk.CTkFrame(
             body, fg_color=TINT["bg"], corner_radius=10,
@@ -1299,44 +1321,12 @@ class App(ctk.CTk):
             text_color=C["faint"],
         ).grid(row=15, column=0, columnspan=2, padx=16, pady=(0, 12), sticky="w")
 
-        self._prog = ctk.CTkProgressBar(
-            body, height=8, fg_color=C["card"], progress_color=C["accent"],
-        )
-        self._prog.pack(fill="x", pady=(4, 6))
-        self._prog.set(0)
-        self._stat = ctk.CTkLabel(
-            body, text="Ready.", font=ctk.CTkFont("Segoe UI", 11),
-            text_color=C["muted"], anchor="w",
-        )
-        self._stat.pack(fill="x", pady=(0, 6))
         self._log = ctk.CTkTextbox(
             body, height=200, font=ctk.CTkFont("Courier New", 11),
             fg_color=C["card"], border_color=C["border"],
             border_width=1, text_color=C["muted"], state="disabled",
         )
         self._log.pack(fill="x", pady=(0, 12))
-
-        btn_row = ctk.CTkFrame(body, fg_color="transparent")
-        btn_row.pack(fill="x", pady=(0, 16))
-
-        self._run_btn = ctk.CTkButton(
-            btn_row, text="▶  Generate UCP PDFs",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"], border_color=C["accent"], border_width=1,
-            corner_radius=24, height=46, command=self._start,
-        )
-        self._run_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
-
-        self._cancel_btn = ctk.CTkButton(
-            btn_row, text="Cancel", width=120,
-            font=ctk.CTkFont("Segoe UI", 13, "bold"),
-            fg_color=C["card"], hover_color="#3a1520",
-            text_color=C["red"], border_color=C["red"], border_width=1,
-            corner_radius=24, height=46, state="disabled",
-            command=self._cancel,
-        )
-        self._cancel_btn.pack(side="right")
 
         self._on_mode_change("From Excel")
 

@@ -15,6 +15,7 @@ import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from PyPDF2 import PdfMerger
+from window_fit import fit_to_screen, add_run_footer, add_primary_run_button
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -149,9 +150,8 @@ class TrackingPdfMatcherApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Tracking PDF Matcher")
-        self.geometry("740x720")
-        self.resizable(False, False)
         self.configure(fg_color=C["bg"])
+        fit_to_screen(self, 740, 700)
         self._main_folder = None
         self._pdf_folder = None
         self._build()
@@ -176,6 +176,10 @@ class TrackingPdfMatcherApp(ctk.CTk):
         ctk.CTkLabel(txt, text="Match Excel barcodes to tracking PDFs, copy & merge per batch",
                      font=ctk.CTkFont("Segoe UI", 11),
                      text_color=C["muted"]).pack(anchor="w")
+
+        _, fi, self._prog, self._stat = add_run_footer(self, C, TINT)
+        self._run_btn = add_primary_run_button(
+            fi, "▶  Match & Merge Tracking PDFs", self._start, C, TINT)
 
         body = ctk.CTkScrollableFrame(self, fg_color="transparent",
                                       scrollbar_button_color=C["border"])
@@ -228,33 +232,13 @@ class TrackingPdfMatcherApp(ctk.CTk):
             text_color=C["text"], command=self._pick_pdfs
         ).pack(side="right")
 
-        self._section(body, "Progress")
-        self._prog = ctk.CTkProgressBar(body, height=8, fg_color=C["card"],
-                                        progress_color=C["accent"])
-        self._prog.pack(fill="x", pady=(4, 8))
-        self._prog.set(0)
-
-        self._stat = ctk.CTkLabel(body, text="Ready.",
-                                  font=ctk.CTkFont("Segoe UI", 11),
-                                  text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 8))
-
+        self._section(body, "Log")
         self._log = ctk.CTkTextbox(body, height=220,
                                    font=ctk.CTkFont("Courier New", 11),
                                    fg_color=C["card"],
                                    border_color=C["border"], border_width=1,
                                    text_color=C["muted"], state="disabled")
-        self._log.pack(fill="x", pady=(0, 16))
-
-        self._run_btn = ctk.CTkButton(
-            body, text="▶  Match & Merge Tracking PDFs",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["mid"], hover_color=TINT["bdr"],
-            text_color=C["accent"],
-            border_color=C["accent"], border_width=1,
-            corner_radius=24, height=48,
-            command=self._start)
-        self._run_btn.pack(fill="x", pady=(0, 20))
+        self._log.pack(fill="x", pady=(0, 12))
 
     def _section(self, parent, text):
         ctk.CTkLabel(parent, text=text,

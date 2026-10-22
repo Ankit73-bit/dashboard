@@ -5,6 +5,7 @@ Embeddable Panel + standalone window.
 """
 
 import os
+import sys
 import shutil
 import threading
 import subprocess
@@ -14,6 +15,11 @@ from datetime import datetime
 import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+
+_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from window_fit import fit_to_screen, attach_panel_chrome
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -40,18 +46,20 @@ def get_output_dir():
 
 # ─── Embeddable Panel Content ─────────────────────────────────────────────────
 
-class PhotoSplitterPanelContent(ctk.CTkScrollableFrame):
+class PhotoSplitterPanelContent(ctk.CTkFrame):
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color="transparent",
-                         scrollbar_button_color=C["border"], **kw)
+        kw.pop("scrollbar_button_color", None)
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._body, self._prog, self._stat, self._run_btn = attach_panel_chrome(
+            self, C, TINT, '▶  Split Photos', self._run)
         self._photos_folder = None
         self._excel_folder  = None
         self._build()
 
     def _build(self):
         # Output banner
-        banner = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=10,
+        banner = ctk.CTkFrame(self._body, fg_color=TINT["bg"], corner_radius=10,
                               border_width=1, border_color=C["accent"])
         banner.pack(fill="x", pady=(4, 14))
         ctk.CTkLabel(banner,
@@ -61,7 +69,7 @@ class PhotoSplitterPanelContent(ctk.CTkScrollableFrame):
 
         # Step 1 — Photos folder
         self._sec("Step 1 — Photos folder (named by employee code)")
-        pr = ctk.CTkFrame(self, fg_color="transparent")
+        pr = ctk.CTkFrame(self._body, fg_color="transparent")
         pr.pack(fill="x", pady=(0, 10))
         self._photos_lbl = ctk.CTkLabel(
             pr, text="No folder selected",
@@ -76,7 +84,7 @@ class PhotoSplitterPanelContent(ctk.CTkScrollableFrame):
 
         # Step 2 — Excel folder
         self._sec("Step 2 — Excel files folder")
-        er = ctk.CTkFrame(self, fg_color="transparent")
+        er = ctk.CTkFrame(self._body, fg_color="transparent")
         er.pack(fill="x", pady=(0, 10))
         self._excel_lbl = ctk.CTkLabel(
             er, text="No folder selected",
@@ -91,7 +99,7 @@ class PhotoSplitterPanelContent(ctk.CTkScrollableFrame):
 
         # Step 3 — Column name
         self._sec("Step 3 — Employee Code column name")
-        col_row = ctk.CTkFrame(self, fg_color="transparent")
+        col_row = ctk.CTkFrame(self._body, fg_color="transparent")
         col_row.pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(col_row, text="Column:",
                      font=ctk.CTkFont("Segoe UI", 11),
@@ -103,38 +111,16 @@ class PhotoSplitterPanelContent(ctk.CTkScrollableFrame):
                      text_color=C["text"], height=34, width=260
                      ).pack(side="left")
 
-        # Step 4 — Run
-        self._sec("Step 4 — Run")
-        self._run_btn = ctk.CTkButton(
-            self, text="▶  Split Photos",
-            font=ctk.CTkFont("Segoe UI", 14, "bold"),
-            fg_color=TINT["bg"], hover_color=TINT["mid"],
-            border_color=C["accent"], border_width=1,
-            text_color=C["accent"], height=44,
-            command=self._run)
-        self._run_btn.pack(fill="x", pady=(0, 10))
-
-        self._prog = ctk.CTkProgressBar(
-            self, fg_color=C["card"], progress_color=C["accent"], height=8)
-        self._prog.set(0)
-        self._prog.pack(fill="x", pady=(0, 4))
-
-        self._stat = ctk.CTkLabel(
-            self, text="Ready.",
-            font=ctk.CTkFont("Segoe UI", 11),
-            text_color=C["muted"], anchor="w")
-        self._stat.pack(fill="x", pady=(0, 10))
-
         # Log
         self._sec("Log")
         self._log_box = ctk.CTkTextbox(
-            self, height=220, fg_color=C["card"],
+            self._body, height=220, fg_color=C["card"],
             border_color=C["border"], border_width=1,
             text_color=C["text"], font=ctk.CTkFont("Consolas", 11))
         self._log_box.pack(fill="both", expand=True, pady=(0, 16))
 
     def _sec(self, t):
-        ctk.CTkLabel(self, text=t.upper(),
+        ctk.CTkLabel(self._body, text=t.upper(),
                      font=ctk.CTkFont("Segoe UI", 10, "bold"),
                      text_color=C["muted"]).pack(anchor="w", pady=(8, 3))
 
@@ -267,7 +253,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Photo Splitter")
-        self.geometry("800x760")
+        fit_to_screen(self, 800, 760)
         self.configure(fg_color=C["bg"])
 
         hdr = ctk.CTkFrame(self, fg_color=TINT["bg"], corner_radius=0)
