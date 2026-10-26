@@ -5,6 +5,7 @@ Split scanned PDFs, read barcodes, rename by barcode.
 
 import os
 import sys
+import re
 import csv
 import shutil
 import threading
@@ -43,54 +44,129 @@ def get_output_dir():
     return path
 
 
-def split_pdf(input_pdf, pages_per_split, output_folder, log_fn):
-    reader = PdfReader(input_pdf)
-    total_pages = len(reader.pages)
-    split_files = []
-    base = os.path.splitext(os.path.basename(input_pdf))[0]
-
-    for i in range(0, total_pages, pages_per_split):
-        writer = PdfWriter()
-        for j in range(i, min(i + pages_per_split, total_pages)):
-            writer.add_page(reader.pages[j])
-
-        output_path = os.path.join(
-            output_folder, f"{base}_split_{i // pages_per_split + 1}.pdf"
-        )
-        if not os.path.exists(output_path):
-            with open(output_path, "wb") as f:
-                writer.write(f)
-            log_fn(f"  Created split: {os.path.basename(output_path)}")
-        else:
-            log_fn(f"  Split exists: {os.path.basename(output_path)}")
-        split_files.append(output_path)
-
-    return split_files
+# India Post article / AWB: JN246289567IN, EK123456789IN, …
+ARTICLE_RE = re.compile(r"([A-Z]{2}\d{9}[A-Z]{2})")
+INVALID_NAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
-def extract_barcode_from_pdf(pdf_path, poppler_path, log_fn):
+def india_post_id(text):
+    if not text:
+        return None
+    m = ARTICLE_RE.search(str(text).upper())
+    return m.group(1) if m else None
+
+
+def barcode_filename(raw):
+    """Prefer the Speed Post / AWB id so QR payloads with | do not become filenames."""
+    aid = india_post_id(raw)
+    if aid:
+        return aid
+    cleaned = INVALID_NAME_RE.sub("_", str(raw or "")).strip(" ._")
+    cleaned = re.sub(r"_+", "_", cleaned)
+    return cleaned[:80] if cleaned else None
+
+
+def _page_text(page):
+    try:
+        return page.extract_text() or ""
+    except Exception:
+        return ""
+
+
+def extract_id_from_pages(reader, start, end):
+    """start inclusive, end exclusive (0-based). Works for 1-page PDFs."""
+    n = len(reader.pages)
+    for i in range(start, min(end, n)):
+        aid = india_post_id(_page_text(reader.pages[i]))
+        if aid:
+            return aid
+    return None
+
+
+def _decode_payloads(img):
+    from pyzbar.pyzbar import decode
+    payloads = []
+    for code in decode(img) or []:
+        try:
+            payloads.append(code.data.decode("utf-8").strip())
+        except Exception:
+            continue
+    return payloads
+
+
+def extract_barcode_from_image_range(pdf_path, first_page, last_page, poppler_path, log_fn):
+    """
+    Raster only the pages that exist (1-based inclusive).
+    last_page=2 on a 1-page PDF is what used to fail.
+    """
     try:
         from pdf2image import convert_from_path
-        from pyzbar.pyzbar import decode
+        from pyzbar.pyzbar import decode  # noqa: F401
     except ImportError as e:
         log_fn(f"Missing dependency: {e}")
         return None
 
-    kwargs = dict(dpi=300, first_page=1, last_page=2)
+    if last_page < first_page:
+        return None
+
+    kwargs = dict(dpi=300, first_page=int(first_page), last_page=int(last_page))
     if poppler_path and os.path.isdir(poppler_path):
         kwargs["poppler_path"] = poppler_path
 
     try:
-        pages = convert_from_path(pdf_path, **kwargs)
-        for page_num, img in enumerate(pages, start=1):
-            barcodes = decode(img)
-            if barcodes:
-                data = barcodes[0].data.decode("utf-8").strip()
-                log_fn(f"  Barcode on page {page_num}: {data}")
-                return data
+        images = convert_from_path(pdf_path, **kwargs)
     except Exception as e:
-        log_fn(f"  Barcode error: {e}")
+        log_fn(f"  Barcode render error (pages {first_page}-{last_page}): {e}")
+        return None
+
+    for offset, img in enumerate(images):
+        payloads = _decode_payloads(img)
+        if not payloads:
+            continue
+        page_num = first_page + offset
+        for data in payloads:
+            aid = india_post_id(data)
+            if aid:
+                log_fn(f"  Barcode on page {page_num}: {aid}")
+                return aid
+        name = barcode_filename(payloads[0])
+        if name:
+            log_fn(f"  Barcode on page {page_num}: {name}")
+            return name
     return None
+
+
+def extract_barcode_for_range(pdf_path, reader, start, end, poppler_path, log_fn):
+    """Identify barcode for pages[start:end] of the original PDF (not a rewritten split)."""
+    try:
+        aid = extract_id_from_pages(reader, start, end)
+        if aid:
+            log_fn(f"  Article ID (PDF text p{start + 1}): {aid}")
+            return aid
+    except Exception as e:
+        log_fn(f"  PDF text skip: {e}")
+
+    n = len(reader.pages)
+    first = start + 1
+    last = min(end, n)
+    return extract_barcode_from_image_range(pdf_path, first, last, poppler_path, log_fn)
+
+
+def write_page_range(reader, src_path, start, end, dest_path):
+    """
+    Keep a 1-page source file intact (rewrite used to drop barcodes).
+    Only subset-write when the range is part of a larger PDF.
+    """
+    n = len(reader.pages)
+    end = min(end, n)
+    if start == 0 and end == n:
+        shutil.copy2(src_path, dest_path)
+        return
+    writer = PdfWriter()
+    for i in range(start, end):
+        writer.add_page(reader.pages[i])
+    with open(dest_path, "wb") as f:
+        writer.write(f)
 
 
 def get_unique_filename(folder, barcode):
@@ -103,7 +179,16 @@ def get_unique_filename(folder, barcode):
         counter += 1
 
 
-def process_pdfs(input_folder, out_dir, pages_per_split, poppler_path, log_fn, progress_fn):
+def _collect_pdfs(input_folder):
+    return [
+        os.path.join(input_folder, f)
+        for f in os.listdir(input_folder)
+        if f.lower().endswith(".pdf")
+    ]
+
+
+def process_pdfs(input_folder, out_dir, pages_per_split, poppler_path, log_fn, progress_fn,
+                 pdf_paths=None):
     split_folder = os.path.join(out_dir, "split_pdfs")
     renamed_folder = os.path.join(out_dir, "renamed_pdfs")
     not_renamed_folder = os.path.join(out_dir, "not_renamed_pdfs")
@@ -116,27 +201,56 @@ def process_pdfs(input_folder, out_dir, pages_per_split, poppler_path, log_fn, p
     with open(log_file, "w", newline="", encoding="utf-8") as log:
         csv.writer(log).writerow(["Original Filename", "New Filename", "Barcode", "Status"])
 
-    pdfs = [f for f in os.listdir(input_folder) if f.lower().endswith(".pdf")]
+    pdfs = list(pdf_paths) if pdf_paths else _collect_pdfs(input_folder)
+    pdfs = [p for p in pdfs if p and os.path.isfile(p) and p.lower().endswith(".pdf")]
     if not pdfs:
-        raise ValueError("No PDF files found in the selected folder.")
+        raise ValueError("No PDF files found. Pick a folder or one or more PDF files.")
 
     total_splits = renamed = duplicates = no_barcode = errors = 0
-    # Rough progress: each source PDF is one unit
-    for pi, filename in enumerate(pdfs, 1):
-        pdf_path = os.path.join(input_folder, filename)
+    for pi, pdf_path in enumerate(pdfs, 1):
+        filename = os.path.basename(pdf_path)
         log_fn(f"\nProcessing: {filename}")
-        split_files = split_pdf(pdf_path, pages_per_split, split_folder, log_fn)
+        try:
+            reader = PdfReader(pdf_path)
+            n_pages = len(reader.pages)
+        except Exception as e:
+            errors += 1
+            log_fn(f"  Cannot open PDF: {e}")
+            progress_fn(pi / len(pdfs))
+            continue
+
+        if n_pages < 1:
+            errors += 1
+            log_fn("  Skipped — PDF reports 0 pages")
+            progress_fn(pi / len(pdfs))
+            continue
+
+        log_fn(f"  {n_pages} page(s), split every {pages_per_split}")
+        base = os.path.splitext(filename)[0]
+        groups = list(range(0, n_pages, pages_per_split))
 
         with open(log_file, "a", newline="", encoding="utf-8") as log:
             writer = csv.writer(log)
-            for split_pdf_path in split_files:
+            for gi, start in enumerate(groups, 1):
+                end = min(start + pages_per_split, n_pages)
                 total_splits += 1
-                if not os.path.exists(split_pdf_path):
+                src_label = f"{filename}[{start + 1}-{end}]"
+                split_name = f"{base}_split_{gi}.pdf"
+                split_pdf_path = os.path.join(split_folder, split_name)
+
+                try:
+                    write_page_range(reader, pdf_path, start, end, split_pdf_path)
+                except Exception as e:
                     errors += 1
-                    writer.writerow([split_pdf_path, "", "", "Missing Split File"])
+                    log_fn(f"  Write split failed: {e}")
+                    writer.writerow([src_label, "", "", f"Write Error: {e}"])
                     continue
 
-                barcode = extract_barcode_from_pdf(split_pdf_path, poppler_path, log_fn)
+                barcode = barcode_filename(
+                    extract_barcode_for_range(
+                        pdf_path, reader, start, end, poppler_path, log_fn
+                    )
+                )
                 if barcode:
                     try:
                         original_file = os.path.join(renamed_folder, f"{barcode}.pdf")
@@ -145,28 +259,28 @@ def process_pdfs(input_folder, out_dir, pages_per_split, poppler_path, log_fn, p
                             dup_name, dup_path = get_unique_filename(duplicate_folder, barcode)
                             shutil.copy2(split_pdf_path, dup_path)
                             log_fn(f"  Duplicate → {dup_name}")
-                            writer.writerow([split_pdf_path, dup_name, barcode, "Duplicate"])
+                            writer.writerow([src_label, dup_name, barcode, "Duplicate"])
                         else:
                             new_name = f"{barcode}.pdf"
                             shutil.copy2(split_pdf_path, os.path.join(renamed_folder, new_name))
                             renamed += 1
                             log_fn(f"  Saved → {new_name}")
-                            writer.writerow([split_pdf_path, new_name, barcode, "Renamed"])
+                            writer.writerow([src_label, new_name, barcode, "Renamed"])
                     except Exception as e:
                         errors += 1
-                        writer.writerow([split_pdf_path, "", barcode, f"Copy Error: {e}"])
+                        writer.writerow([src_label, "", barcode, f"Copy Error: {e}"])
                 else:
                     try:
-                        dest = os.path.join(not_renamed_folder, os.path.basename(split_pdf_path))
+                        dest = os.path.join(not_renamed_folder, split_name)
                         shutil.copy2(split_pdf_path, dest)
                         no_barcode += 1
                         log_fn("  No barcode → not_renamed")
-                        writer.writerow([
-                            split_pdf_path, os.path.basename(split_pdf_path), "", "No Barcode Found"
-                        ])
+                        writer.writerow([src_label, split_name, "", "No Barcode Found"])
                     except Exception as e:
                         errors += 1
-                        writer.writerow([split_pdf_path, "", "", f"No Barcode Copy Error: {e}"])
+                        writer.writerow([src_label, "", "", f"No Barcode Copy Error: {e}"])
+
+                progress_fn((pi - 1 + gi / len(groups)) / len(pdfs))
 
         progress_fn(pi / len(pdfs))
 
@@ -188,6 +302,7 @@ class App(ctk.CTk):
         self.configure(fg_color=C["bg"])
         fit_to_screen(self, 760, 700)
         self._folder = None
+        self._pdfs = []
         self._build()
 
     def _build(self):
@@ -198,8 +313,8 @@ class App(ctk.CTk):
         ctk.CTkLabel(inn, text="✂️  Barcode Split & Rename",
                      font=ctk.CTkFont("Segoe UI", 18, "bold"),
                      text_color=C["text"]).pack(anchor="w")
-        ctk.CTkLabel(inn, text="Scan Step 1 — split PDFs · read barcodes · rename",
-                     font=ctk.CTkFont("Segoe UI", 11),                      text_color=C["muted"]).pack(anchor="w")
+        ctk.CTkLabel(inn, text="Split PDFs · read barcode / Speed Post ID · rename",
+                     font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"]).pack(anchor="w")
 
         _, fi, self._prog, self._stat = add_run_footer(self, C, TINT)
         self._run_btn = add_primary_run_button(
@@ -217,18 +332,23 @@ class App(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 11), text_color=C["accent"]
         ).pack(anchor="w", padx=14, pady=8)
 
-        self._sec(body, "Scanned PDFs folder")
+        self._sec(body, "PDFs — file(s) or folder")
         fr = ctk.CTkFrame(body, fg_color="transparent")
         fr.pack(fill="x", pady=(0, 10))
-        self._folder_lbl = ctk.CTkLabel(fr, text="No folder selected",
+        self._folder_lbl = ctk.CTkLabel(fr, text="Nothing selected",
                                         font=ctk.CTkFont("Segoe UI", 12),
                                         text_color=C["muted"], anchor="w")
         self._folder_lbl.pack(side="left", fill="x", expand=True)
-        ctk.CTkButton(fr, text="Browse…", width=90, height=34,
+        ctk.CTkButton(fr, text="File…", width=80, height=34,
                       fg_color=C["card"], hover_color=C["hover"],
                       border_color=C["border"], border_width=1,
                       text_color=C["text"],
-                      command=self._pick).pack(side="right")
+                      command=self._pick_files).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(fr, text="Folder…", width=90, height=34,
+                      fg_color=C["card"], hover_color=C["hover"],
+                      border_color=C["border"], border_width=1,
+                      text_color=C["text"],
+                      command=self._pick_folder).pack(side="right")
 
         self._sec(body, "Settings")
         settings = ctk.CTkFrame(body, fg_color=C["card"], corner_radius=12,
@@ -238,12 +358,35 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(settings, text="Pages per split",
                      font=ctk.CTkFont("Segoe UI", 11), text_color=C["muted"], width=120
-                     ).grid(row=0, column=0, padx=16, pady=14, sticky="w")
-        self._pages_e = ctk.CTkEntry(settings, width=100, height=34,
+                     ).grid(row=0, column=0, padx=16, pady=(14, 4), sticky="w")
+        self._pages_e = ctk.CTkEntry(settings, width=80, height=34,
                                      fg_color=C["hover"], border_color=C["border"],
                                      text_color=C["text"])
-        self._pages_e.grid(row=0, column=1, padx=16, pady=14, sticky="w")
-        self._pages_e.insert(0, "2")
+        self._pages_e.grid(row=0, column=1, padx=16, pady=(14, 4), sticky="w")
+        self._pages_e.insert(0, "1")
+
+        preset = ctk.CTkFrame(settings, fg_color="transparent")
+        preset.grid(row=1, column=0, columnspan=2, padx=16, pady=(0, 8), sticky="w")
+        ctk.CTkButton(
+            preset, text="1 page  (Speed Post / labels)",
+            width=210, height=30, font=ctk.CTkFont("Segoe UI", 11),
+            fg_color=TINT["mid"], hover_color=TINT["bdr"],
+            text_color=C["accent"], border_color=C["accent"], border_width=1,
+            command=lambda: self._set_pages(1),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            preset, text="2 pages  (envelope pairs)",
+            width=200, height=30, font=ctk.CTkFont("Segoe UI", 11),
+            fg_color=C["card"], hover_color=C["hover"],
+            text_color=C["text"], border_color=C["border"], border_width=1,
+            command=lambda: self._set_pages(2),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            settings,
+            text="This Speed Post PDF is 1 label per page — use 1. Each file is named JN……IN.",
+            font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
+            anchor="w", justify="left",
+        ).grid(row=2, column=0, columnspan=2, padx=16, pady=(0, 12), sticky="w")
 
         self._log = ctk.CTkTextbox(body, height=220, font=ctk.CTkFont("Courier New", 11),
                                    fg_color=C["card"], border_color=C["border"],
@@ -260,16 +403,39 @@ class App(ctk.CTk):
         self._log.see("end")
         self._log.configure(state="disabled")
 
-    def _pick(self):
-        folder = filedialog.askdirectory(title="Select scanned PDFs folder")
+    def _set_pages(self, n):
+        self._pages_e.delete(0, "end")
+        self._pages_e.insert(0, str(n))
+
+    def _set_pdfs(self, paths, label):
+        self._pdfs = list(paths)
+        n = len(self._pdfs)
+        self._folder = os.path.dirname(self._pdfs[0]) if self._pdfs else None
+        self._folder_lbl.configure(
+            text=f"{label}  ({n} PDF{'s' if n != 1 else ''})",
+            text_color=C["accent"] if n else C["muted"],
+        )
+
+    def _pick_folder(self):
+        folder = filedialog.askdirectory(title="Select folder of PDFs")
         if folder:
-            self._folder = folder
-            n = len([f for f in os.listdir(folder) if f.lower().endswith(".pdf")])
-            self._folder_lbl.configure(text=f"{folder}  ({n} PDFs)", text_color=C["accent"])
+            found = _collect_pdfs(folder)
+            if not found:
+                messagebox.showwarning("No PDFs", "That folder has no .pdf files.")
+                return
+            self._set_pdfs(found, folder)
+
+    def _pick_files(self):
+        files = filedialog.askopenfilenames(
+            title="Select PDF file(s)",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if files:
+            self._set_pdfs(files, files[0] if len(files) == 1 else f"{len(files)} files")
 
     def _start(self):
-        if not self._folder:
-            messagebox.showwarning("Missing", "Select the scanned PDFs folder.")
+        if not self._pdfs:
+            messagebox.showwarning("Missing", "Select a PDF file or a folder of PDFs.")
             return
         try:
             pages = int(self._pages_e.get().strip())
@@ -279,22 +445,23 @@ class App(ctk.CTk):
             messagebox.showwarning("Invalid", "Pages per split must be a positive number.")
             return
 
-        if not os.path.isdir(POPPLER_PATH):
-            messagebox.showerror(
+        poppler = POPPLER_PATH if os.path.isdir(POPPLER_PATH) else ""
+        if not poppler:
+            messagebox.showwarning(
                 "Poppler missing",
-                f"Bundled Poppler not found at:\n{POPPLER_PATH}\n\n"
-                "Place poppler-25.07.0 inside the scan_letter folder."
+                "Bundled Poppler not found — Speed Post article IDs in PDF text "
+                "will still work. Scanned image barcodes may fail.\n\n"
+                f"Expected:\n{POPPLER_PATH}"
             )
-            return
 
         self._run_btn.configure(state="disabled", text="Processing…")
         self._prog.set(0)
         self._log.configure(state="normal")
         self._log.delete("1.0", "end")
         self._log.configure(state="disabled")
-        threading.Thread(target=self._run, args=(pages,), daemon=True).start()
+        threading.Thread(target=self._run, args=(pages, poppler), daemon=True).start()
 
-    def _run(self, pages):
+    def _run(self, pages, poppler):
         out_dir = get_output_dir()
 
         def log(m):
@@ -304,10 +471,13 @@ class App(ctk.CTk):
             self.after(0, lambda v=p: self._prog.set(v))
 
         try:
-            log(f"Input   → {self._folder}")
+            log(f"Input   → {len(self._pdfs)} PDF(s)")
             log(f"Output  → {out_dir}")
-            log(f"Poppler → {POPPLER_PATH}\n")
-            stats = process_pdfs(self._folder, out_dir, pages, POPPLER_PATH, log, prog)
+            log(f"Poppler → {poppler or '(not found — text IDs only)'}\n")
+            stats = process_pdfs(
+                self._folder or "", out_dir, pages, poppler, log, prog,
+                pdf_paths=self._pdfs,
+            )
             log("\n========== SUMMARY ==========")
             log(f"Total splits : {stats['total_splits']}")
             log(f"Renamed      : {stats['renamed']}")

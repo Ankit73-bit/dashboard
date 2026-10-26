@@ -45,14 +45,15 @@ SCAN_SERVICES = [
         "script":      os.path.join(SCAN_SCRIPTS, "barcode_split_rename.py"),
         "sample":      None,
         "docs": {
-            "what": "Takes a folder of scanned multi-page PDFs, splits them into fixed page groups (default 2 pages), reads the barcode from each split with pdf2image + pyzbar, and saves uniquely named <barcode>.pdf files. Duplicates and no-barcode splits are sorted into separate folders with a CSV log.",
-            "when": "Use after Envelope Pattern Check (or on already-clean scans). Output renamed_pdfs feed into Barcode Excel Matcher.",
+            "what": "Takes a folder of multi-page PDFs, splits them into fixed page groups, reads the barcode (or Speed Post article ID JN…IN from page text / QR), and saves uniquely named <barcode>.pdf files. Duplicates and no-barcode splits are sorted into separate folders with a CSV log.",
+            "when": "Use for India Post Speed Post label PDFs (1 page = 1 article) or after Envelope Pattern Check on scanned letters (2 pages). Output renamed_pdfs feed into Barcode Excel Matcher.",
             "steps": [
-                ("Select scanned PDFs folder", "Browse to cleaned_pdfs from Step 1, or your multi-page scanned PDFs."),
-                ("Set pages per split", "Default is 2 (one letter = 2 pages). Change if your scan layout differs."),
-                ("Click Run", "Splits are created, barcodes read, and files sorted into renamed / not_renamed / duplicate folders."),
+                ("Select PDFs folder", "Folder of Speed Post label PDFs, cleaned_pdfs from Step 1, or other multi-page PDFs."),
+                ("Set pages per split", "Use 1 for Speed Post / one label per page. Use 2 for envelope front+back scans."),
+                ("Click Run", "Splits are created, barcodes / article IDs read, and files sorted into renamed / not_renamed / duplicate folders."),
             ],
             "tips": [
+                "Speed Post labels are renamed to JN246289567IN.pdf (article ID), not the full QR payload.",
                 "Requires pdf2image, pyzbar, and PyPDF2. Poppler is bundled under scan_letter\\poppler-25.07.0.",
                 "Duplicate barcodes go to duplicate_pdfs with unique suffixes.",
                 "A rename_log.csv is written inside the renamed folder.",
