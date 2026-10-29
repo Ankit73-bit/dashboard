@@ -142,11 +142,11 @@ GROUPS = [
     },
     {
         "title":       "PDF Tools",
-        "description": "Watermark, generate, merge, compress, split/rename, remove pages, split/zip, match tracking, and Excel-mapped merge.",
+        "description": "Watermark, generate, merge, compress, split/rename, remove pages, strip overflow pages, split/zip, match tracking, and Excel-mapped merge.",
         "icon":        "📄",
         "accent":      C["purple"],
         "tag":         "PDF",
-        "count":       "9 tools",
+        "count":       "10 tools",
         "tools": [
                 {
                     "title":       "PDF Watermark",
@@ -345,6 +345,31 @@ GROUPS = [
                             "Output file is named <original>_pages_removed.pdf.",
                         ],
                         "output": "Desktop\\OUTPUT\\PDF_Page_Remover\\YYYY-MM-DD_HH-MM-SS\\",
+                    },
+                },
+                {
+                    "title":       "Remove Overflow Pages",
+                    "sample":      None,
+                    "description": "Remove extra pages where only leftover last lines spilled over (letterhead + last line).",
+                    "icon":        "🧹",
+                    "accent":      C["pink"],
+                    "tag":         "PDF · Edit",
+                    "script":      os.path.join(SCRIPTS, "pdf_remove_overflow_pages.py"),
+                    "docs": {
+                        "what": "Finds pages that are much shorter than the notices in the same PDF — typically letterhead plus a leftover last line that did not fit on the previous page — and writes a new PDF without them. Full notice pages are kept. Originals are never modified.",
+                        "when": "Use after merging or compressing notice packs, when wrapping text pushed the last line onto an extra page.",
+                        "steps": [
+                            ("Open the tool", "Click 'Launch →' on the Remove Overflow Pages card under PDF Tools."),
+                            ("Add File or Folder", "Use 'File…' for one or more PDFs, or 'Folder…' for every PDF in a directory (subfolders optional)."),
+                            ("Optional limit", "Leave max leftover chars blank to auto-detect from each file, or set a number (e.g. 800)."),
+                            ("Click Remove Overflow Pages", "Cleaned PDFs and a removed_pages_log.csv are saved; the output folder opens."),
+                        ],
+                        "tips": [
+                            "A page is overflow if it is far shorter than typical notices in that file and is not a full notice (no WITHOUT PREJUDICE / LOAN RECALL).",
+                            "The log lists every removed page number per file.",
+                            "If a PDF has no overflow pages it is copied as-is.",
+                        ],
+                        "output": "Desktop\\OUTPUT\\PDF_Remove_Overflow_Pages\\YYYY-MM-DD_HH-MM-SS\\",
                     },
                 },
                 {
