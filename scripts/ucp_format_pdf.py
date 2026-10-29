@@ -9,6 +9,7 @@ import re
 import json
 import threading
 import subprocess
+import numbers
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +41,7 @@ DEFAULT_SHEETS_PER_BOOK = 50  # groups packed into one Excel open/export (big sp
 WIDE_WIDTH = 70
 LOG_EVERY = 1  # log every N batches (each batch = sheets_per_book groups)
 CHUNK_META_NAME = "chunk_split_meta.json"
+_SCI_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?[eE][+-]?\d+$")
 
 
 class CancelledError(Exception):
@@ -78,6 +80,42 @@ def find_column(columns, preferred_names):
     return None
 
 
+def format_cell_value(val):
+    """
+    Full digits for account / ID numbers. Excel General format turns
+    809007597779 into 8.09008E+11 in the PDF — write text instead.
+    """
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, numbers.Integral) and not isinstance(val, bool):
+        return str(int(val))
+    if isinstance(val, numbers.Real) and not isinstance(val, bool):
+        f = float(val)
+        if f.is_integer() and abs(f) < 1e16:
+            return str(int(f))
+        return str(f)
+    s = str(val).strip()
+    if not s or s.lower() in ("nan", "none", "nat"):
+        return ""
+    if _SCI_RE.match(s):
+        try:
+            f = float(s)
+            if f.is_integer() and abs(f) < 1e16:
+                return str(int(f))
+        except ValueError:
+            pass
+    if s.endswith(".0") and s[:-2].lstrip("-").isdigit():
+        return s[:-2]
+    return s
+
+
 PROSPECT_COL_NAMES = (
     DEFAULT_GROUP_COL, "prospect_no", "Prospect No", "ProspectNo", "Prospect Number",
 )
@@ -93,23 +131,22 @@ def pick_prospect_no(group_df, group_value):
         return group_value
     series = group_df[prospect_col].dropna()
     if series.empty:
-        return group_value
-    vals = series.astype(str).str.strip()
-    vals = vals[vals != ""]
-    unique = vals.unique()
-    if len(unique) == 0:
-        return group_value
-    return unique[0]
+        return format_cell_value(group_value)
+    for v in series:
+        s = format_cell_value(v)
+        if s:
+            return s
+    return format_cell_value(group_value)
 
 
 def pick_filename(group_df, name_col, fallback):
     """First non-blank value from the chosen filename column (fallback: group key)."""
     if name_col and name_col in group_df.columns:
-        series = group_df[name_col].dropna().astype(str).str.strip()
-        series = series[(series != "") & (~series.str.lower().isin(["nan", "none", "nat"]))]
-        if len(series) > 0:
-            return series.iloc[0]
-    return fallback
+        for v in group_df[name_col]:
+            s = format_cell_value(v)
+            if s:
+                return s
+    return format_cell_value(fallback)
 
 
 def safe_filename(raw) -> str:
@@ -523,13 +560,13 @@ def resolve_header(template: str, group_value, prospect_no=None) -> str:
     If no placeholder is present, append the prospect no (fallback: group).
     """
     text = template or DEFAULT_HEADER
-    p = prospect_no if prospect_no is not None else group_value
-    g = group_value
+    p = format_cell_value(prospect_no if prospect_no is not None else group_value)
+    g = format_cell_value(group_value)
     replacements = {
-        "{prospect_no}": str(p),
-        "{Prospect_No}": str(p),
-        "{group}": str(g),
-        "{GROUP}": str(g),
+        "{prospect_no}": p,
+        "{Prospect_No}": p,
+        "{group}": g,
+        "{GROUP}": g,
     }
     out = text
     for k, v in replacements.items():
@@ -684,16 +721,11 @@ def add_styled_sheet(wb, sheet_name, group_df, header_text, wide_col_name, date_
     # Write data via itertuples (much faster than cell-by-cell from pandas ExcelWriter)
     for r_idx, row in enumerate(group_df.itertuples(index=False, name=None), 3):
         for c_idx, val in enumerate(row, 1):
-            if val is None or (isinstance(val, float) and pd.isna(val)):
-                val = ""
-            elif c_idx in date_idxs:
-                val = "" if (isinstance(val, float) and pd.isna(val)) else str(val)
-            elif isinstance(val, float) and pd.isna(val):
-                val = ""
+            val = format_cell_value(val)
             cell = ws.cell(row=r_idx, column=c_idx, value=val)
             cell.alignment = _CENTER
             cell.border = _THIN
-            if c_idx in date_idxs and val != "":
+            if isinstance(val, str) and val != "":
                 cell.number_format = "@"
         ws.row_dimensions[r_idx].height = 45
 
@@ -705,11 +737,11 @@ def add_styled_sheet(wb, sheet_name, group_df, header_text, wide_col_name, date_
             continue
         series = group_df.iloc[:, c_idx - 1]
         try:
-            max_len = int(series.astype(str).str.len().max() or 0)
+            max_len = max((len(str(format_cell_value(v))) for v in series), default=0)
         except Exception:
             max_len = 10
         max_len = max(max_len, len(str(col)))
-        ws.column_dimensions[letter].width = min(max_len + 2, 40)
+        ws.column_dimensions[letter].width = min(max_len + 3, 40)
 
     ws.row_dimensions[2].height = 45
     return ws
@@ -1007,7 +1039,9 @@ def run_pipeline(
                 g.insert(0, "SrNo", range(1, len(g) + 1))
                 prospect_no = pick_prospect_no(g, group_value)
                 header_text = resolve_header(header_template, group_value, prospect_no)
-                safe_sheet = re.sub(r'[<>:"/\\|?*]', "_", str(group_value).strip()) or "group"
+                safe_sheet = re.sub(
+                    r'[<>:"/\\|?*]', "_", format_cell_value(group_value)
+                ) or "group"
                 file_names.append(pick_filename(g, name_col, group_value))
                 sheet_specs.append(
                     (safe_sheet, g, header_text, wide_for_group, date_cols_group)
