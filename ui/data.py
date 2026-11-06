@@ -47,11 +47,11 @@ GROUPS = [
     },
     {
         "title":       "Printing",
-        "description": "Send PDFs and documents to your default printer with batch, duplex, and order controls.",
+        "description": "Send PDFs and documents to your default printer with batch, duplex, order, and print-pack controls.",
         "icon":        "🖨️",
         "accent":      C["green"],
         "tag":         "Print · PDF",
-        "count":       "3 tools",
+        "count":       "4 tools",
         "tools": [
             {
                 "title":       "SR No Stamp & Print",
@@ -136,6 +136,34 @@ GROUPS = [
                         "Use a small delay (2-3 sec) for local printers and a larger one (5-10 sec) for network printers.",
                     ],
                     "output": "Desktop\\OUTPUT\\Quick_Print\\YYYY-MM-DD_HH-MM-SS\\",
+                },
+            },
+            {
+                "title":       "Build Print Pack",
+                "description": "Repeat each notice once per person (co-apps / guarantors) with an optional office set — one print PDF + checklist.",
+                "icon":        "📦",
+                "accent":      C["green"],
+                "tag":         "Print · PDF",
+                "script":      os.path.join(SCRIPTS, "build_print_pack.py"),
+                "sample":      None,
+                "docs": {
+                    "what": "Reads an Excel allocation (Reference No., Name, optional Co-applicant / Guarantor columns) and a notice PDF or Word file. Matches each reference to its pages, then builds one print-ready PDF where every notice is repeated once for each person, plus an optional extra office set. Also writes a checklist Excel that maps each printed set to a name.",
+                    "when": "Use this for ARC / demand-notice batches where each applicant, co-applicant, and guarantor needs their own physical copy of the same notice, and you want one file to send to the printer.",
+                    "steps": [
+                        ("Open the tool", "Click 'Launch →' on the Build Print Pack card under Printing."),
+                        ("Select Excel allocation", "Must have Reference No. and Name. Optional: Agreement No., Sr No., Co-applicant 1…, Guarantor 1…."),
+                        ("Select notice PDF or Word", "PDF preferred. A .docx is converted to PDF via Word so page numbers match."),
+                        ("Office copy", "Leave checked to add one extra set of each notice for your file."),
+                        ("Click Build Print Pack", "The tool matches references, checks names, then writes the print PDF and checklist."),
+                        ("Print", "Print the whole Print_Ready_*.pdf one-sided at actual size. Use the checklist to see who each set is for."),
+                    ],
+                    "tips": [
+                        "Each reference must appear exactly once in Excel and on the first page of that notice.",
+                        "Person names from Excel must appear in the matching notice text (same batch).",
+                        "If Excel row order differs from notice order, the print file follows the notice file.",
+                        "Close the Excel and PDF if they are open before running.",
+                    ],
+                    "output": "Desktop\\OUTPUT\\Build_Print_Pack\\YYYY-MM-DD_HH-MM-SS\\",
                 },
             },
         ],

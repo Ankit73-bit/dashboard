@@ -5,7 +5,8 @@ Pipeline for RBL-style notice lists (CSV/Excel) prepared with numbered address s
 
 Flow:
   [optional] link-loan expand (groupby CUST_ID, suffix only selected cols)
-  → unpivot person slots → sticker rows → barcodes → pivot → split by address count.
+  → unpivot person slots → sticker rows → barcodes → pivot
+  → per-barcode pivot (one barcode per row) → split by address count.
 
 Optional extras per slot (same index): pin_1, mobile_1, state_1, city_1, sr_1, b_1, p_1
 (final_add_N is accepted as an alias for address_N).
@@ -46,6 +47,7 @@ _SLOT_COL_RE = re.compile(
     r"^(" + "|".join(_SLOT_PREFIXES) + r")_(\d+)$",
     re.I,
 )
+_BARCODE_SLOT_RE = re.compile(r"^(barcode|b)_(\d+)$", re.I)
 
 # Long-form sticker columns (order matches sample pivoted layout intent)
 GROUP_COLS = [
@@ -658,6 +660,63 @@ def insert_barcodes(sticker_path, barcode_file, log_fn, barcode_sheet=0):
         log_fn(f"  ✅ Barcodes inserted ({len(sticker_df):,} rows) — b + barcode Typst")
 
 
+def _slot_col(columns, prefix, n):
+    want = f"{prefix}_{n}"
+    for c in columns:
+        if _norm(c) == want:
+            return c
+    return None
+
+
+def explode_pivot_one_barcode(df):
+    """
+    From a pivoted loan row that has barcode_1, barcode_2, … filled,
+    emit one row per barcode: that slot keeps barcode/b, the others
+    keep name/address/details but barcode_N and b_N are cleared.
+    unique_id is 1, 2, 3… across the exploded file.
+    """
+    if df is None or df.empty:
+        return df.copy() if df is not None else pd.DataFrame()
+
+    cols = list(df.columns)
+    slots = sorted({
+        int(m.group(2))
+        for c in cols
+        if (m := _BARCODE_SLOT_RE.match(_norm(c)))
+    })
+    if not slots:
+        return df.copy()
+
+    uid_col = find_col(cols, "unique_id", "unique id")
+    rows_out = []
+    uid = 1
+    for rec in df.to_dict(orient="records"):
+        active = []
+        for i in slots:
+            bcode = _slot_col(cols, "barcode", i)
+            bshort = _slot_col(cols, "b", i)
+            if (bcode and _clean(rec.get(bcode))) or (bshort and _clean(rec.get(bshort))):
+                active.append(i)
+        targets = active or [None]
+        for keep in targets:
+            new = dict(rec)
+            if uid_col:
+                new[uid_col] = uid
+                uid += 1
+            if keep is not None:
+                for j in slots:
+                    if j == keep:
+                        continue
+                    for prefix in ("barcode", "b"):
+                        c = _slot_col(cols, prefix, j)
+                        if c:
+                            new[c] = None
+            rows_out.append(new)
+    out = pd.DataFrame(rows_out)
+    extra = [c for c in out.columns if c not in cols]
+    return out[cols + extra]
+
+
 def pivot_and_sort(sticker_path, out_dir, selected_cols, first_col, max_groups, log_fn):
     df = pd.read_excel(sticker_path)
     df.columns = [_norm(c) for c in df.columns]
@@ -734,6 +793,14 @@ def pivot_and_sort(sticker_path, out_dir, selected_cols, first_col, max_groups, 
     log_fn(
         f"  ✅ pivoted_data_with_unique_id.xlsx → {len(df_pivoted):,} rows  "
         f"(grouped by {group_col}, padded to {max_groups} address slots)"
+    )
+
+    per_bc = explode_pivot_one_barcode(df_pivoted)
+    per_bc_path = os.path.join(out_dir, "pivoted_data_per_barcode.xlsx")
+    per_bc.to_excel(per_bc_path, index=False)
+    log_fn(
+        f"  ✅ pivoted_data_per_barcode.xlsx → {len(per_bc):,} rows  "
+        f"(one barcode per row; other slots keep address, barcode/b cleared)"
     )
     return pivot_path
 
@@ -1053,6 +1120,11 @@ class RBLExcelTransformerPanel(ctk.CTkFrame):
                 fg_color=C["accent"], hover_color=TINT["bdr"],
                 border_color=C["border"], checkmark_color="#000",
             ).pack(side="left", padx=(0, 24))
+        ctk.CTkLabel(
+            self._body,
+            text="Pivot also writes pivoted_data_per_barcode.xlsx — one barcode per row, other slots keep address only.",
+            font=ctk.CTkFont("Segoe UI", 10), text_color=C["faint"],
+        ).pack(anchor="w", pady=(0, 4))
 
         bc_opt = ctk.CTkFrame(self._body, fg_color="transparent")
         bc_opt.pack(fill="x", pady=(0, 12))
